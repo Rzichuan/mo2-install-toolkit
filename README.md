@@ -103,3 +103,14 @@ mo2-tool npc verify <plan.json> --json
 ```
 
 Plans bind to profile hashes and stable candidate IDs. The LLM/user selects only IDs emitted by the plan; paths and copy/plugin-edit commands are not accepted. Applying requires one explicit confirmation, blocks while MO2 or Skyrim is running, stages output, preserves existing entry order, and creates a restorable transaction. This release indexes loose FaceGen; BSA-only assets are reported as a limitation. Final follow-up steps are recommendations rather than mandatory instructions.
+
+
+## Profile three-state operations
+
+```powershell
+mo2-tool profile apply Default --disable-mod "Example" --dry-run --json
+mo2-tool profile apply Default --unregister-plugin "Example.esp" --json
+mo2-tool nexus download 12345 67890 --json
+```
+
+Plugin states are `enabled`, `disabled`, or `unregistered`. Existing mod toggles stay in place unless an explicit placement option is supplied. Installation plans use schema v2 and are invalidated by changes to any profile file.

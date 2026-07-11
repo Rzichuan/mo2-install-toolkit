@@ -1,3 +1,10 @@
+## 0.7.0
+
+- Added strict enabled/disabled/unregistered plugin state transitions shared by plan and apply.
+- Added schema-v2 plans bound to all three profile files; apply commits the prevalidated profile result and rejects drift.
+- Added native transactional `profile apply`, in-place mod toggles, explicit movement, dry-run, and `--unregister-plugin`.
+- Added explicit Nexus info/deps/download argument parsing and canonical download syntax.
+
 ## 0.6.0
 
 - Packaged the Skill instructions and complete PyInstaller runtime as one shared, self-contained Bundle for Claude Code and Codex.

@@ -493,8 +493,9 @@ def parser() -> argparse.ArgumentParser:
     for name in ("status","remove","clear"):
         x=aa.add_parser(name); x.add_argument("--json",action="store_true")
     n=sub.add_parser("nexus"); nn=n.add_subparsers(dest="nexus_command",required=True)
-    for name in ("info","deps","download"):
-        x=nn.add_parser(name); x.add_argument("args",nargs=argparse.REMAINDER); x.add_argument("--json",action="store_true")
+    ni=nn.add_parser("info"); ni.add_argument("mod_id"); ni.add_argument("--json",action="store_true")
+    ndp=nn.add_parser("deps"); ndp.add_argument("mod_id"); ndp.add_argument("--json",action="store_true")
+    ndl=nn.add_parser("download"); ndl.add_argument("values",nargs="+"); ndl.add_argument("--json",action="store_true")
     nr=nn.add_parser("request"); nr.add_argument("mod_id",type=int); nr.add_argument("file_id",type=int)
     nr.add_argument("--downloads-dir"); nr.add_argument("--timeout",type=int,default=900)
     nr.add_argument("--poll-interval",type=float,default=2.0,help=argparse.SUPPRESS)
@@ -514,7 +515,7 @@ def parser() -> argparse.ArgumentParser:
     rd=rr.add_parser("deploy"); rd.add_argument("archive"); rd.add_argument("--dry-run",action="store_true"); rd.add_argument("--yes",action="store_true"); rd.add_argument("--json",action="store_true")
     ins=sub.add_parser("install"); ii=ins.add_subparsers(dest="install_command",required=True)
     ix=ii.add_parser("inspect"); ix.add_argument("archive"); ix.add_argument("--json",action="store_true")
-    ip=ii.add_parser("plan"); ip.add_argument("archive"); ip.add_argument("--name"); ip.add_argument("--selections"); ip.add_argument("--modid",type=int); ip.add_argument("--file-id",type=int); ip.add_argument("--json",action="store_true")
+    ip=ii.add_parser("plan"); ip.add_argument("archive"); ip.add_argument("--name"); ip.add_argument("--selections"); ip.add_argument("--modid",type=int); ip.add_argument("--file-id",type=int); ip.add_argument("--full-context",action="store_true"); ip.add_argument("--json",action="store_true")
     placement_group=ip.add_mutually_exclusive_group()
     placement_group.add_argument("--before-mod"); placement_group.add_argument("--after-mod")
     placement_group.add_argument("--modlist-top",action="store_true"); placement_group.add_argument("--modlist-bottom",action="store_true")
@@ -526,8 +527,12 @@ def parser() -> argparse.ArgumentParser:
     il=ii.add_parser("legacy",help=argparse.SUPPRESS); il.add_argument("archive"); il.add_argument("args",nargs=argparse.REMAINDER); il.add_argument("--dry-run",action="store_true"); il.add_argument("--json",action="store_true")
     x=sub.add_parser("update"); x.add_argument("archive"); x.add_argument("args",nargs=argparse.REMAINDER); x.add_argument("--dry-run",action="store_true"); x.add_argument("--json",action="store_true")
     pr=sub.add_parser("profile"); pp=pr.add_subparsers(dest="profile_command",required=True)
-    for name in ("audit","apply"):
-        x=pp.add_parser(name); x.add_argument("args",nargs=argparse.REMAINDER); x.add_argument("--json",action="store_true")
+    pa=pp.add_parser("audit"); pa.add_argument("profile",nargs="?"); pa.add_argument("--json",action="store_true")
+    pap=pp.add_parser("apply"); pap.add_argument("profile",nargs="?");
+    pap.add_argument("--enable-mod",action="append",default=[]); pap.add_argument("--disable-mod",action="append",default=[])
+    pap.add_argument("--enable-plugin",action="append",default=[]); pap.add_argument("--disable-plugin",action="append",default=[]); pap.add_argument("--unregister-plugin",action="append",default=[])
+    pg=pap.add_mutually_exclusive_group(); pg.add_argument("--before-mod"); pg.add_argument("--after-mod"); pg.add_argument("--modlist-top",action="store_true"); pg.add_argument("--modlist-bottom",action="store_true")
+    pap.add_argument("--dry-run",action="store_true"); pap.add_argument("--json",action="store_true")
     npc=sub.add_parser("npc",help="Scan, plan, decide, apply, and verify NPC FaceGen conflicts")
     np=npc.add_subparsers(dest="npc_command",required=True)
     ns=np.add_parser("scan"); ns.add_argument("--output"); ns.add_argument("--sidecar"); ns.add_argument("--json",action="store_true")
@@ -638,8 +643,23 @@ def main(argv: list[str] | None=None) -> int:
                     data=json.loads(sp.read_text(encoding="utf-8")) if args.batch_command=="status" else collect_batch(sp)
                     payload,code=envelope("success" if data.get("status") in ("collected","awaiting_downloads") else "review",data,[] if data.get("status")!="review" else ["Some downloads are missing or ambiguous"]),0 if data.get("status")!="review" else 1
             else:
-                mapping={"info":("nexus-mod-info.py",["full"]),"deps":("nexus-deps-resolve.py",["check"]),"download":("nexus-download.py",[])}
-                script,prefix=mapping[args.nexus_command]; return run_legacy(script,prefix+args.args,load_config())
+                mapping={"info":("nexus-mod-info.py",["full",str(args.mod_id)]),"deps":("nexus-deps-resolve.py",["check",str(args.mod_id)])}
+                warnings=[]
+                if args.nexus_command=="download":
+                    values=list(args.values)
+                    if values and values[0]=="download": warnings.append("Deprecated syntax: use nexus download <mod-id> <file-id>"); values=values[1:]
+                    if len(values)!=2: raise ToolError("nexus download requires <mod-id> <file-id>",2)
+                    script="nexus-download.py"; call=values
+                else: script,call=mapping[args.nexus_command]
+                if warnings and as_json:
+                    captured=io.StringIO()
+                    with contextlib.redirect_stdout(captured): code=run_legacy(script,call+["--json"],load_config())
+                    try:
+                        legacy=json.loads(captured.getvalue()); payload,code=envelope("success" if code==0 else "error",legacy,warnings=warnings),code
+                        emit(payload,True); return code
+                    except json.JSONDecodeError: raise ToolError("Legacy Nexus command returned invalid JSON",10)
+                if warnings: print("WARNING: "+warnings[0],file=sys.stderr)
+                return run_legacy(script,call+(["--json"] if as_json else []),load_config())
         elif args.command=="plan":
             if not args.target.startswith("nexus:"): raise ToolError("Only nexus:<mod-id> targets are supported",2)
             return run_legacy("nexus-deps-resolve.py",["plan",args.target.split(":",1)[1]] + (["--json"] if as_json else []),load_config())
@@ -666,7 +686,11 @@ def main(argv: list[str] | None=None) -> int:
                 if (args.modid is None)!=(args.file_id is None):raise ToolError("--modid and --file-id must be provided together",2)
                 source_metadata=_nexus_file_metadata(args.modid,args.file_id) if args.modid is not None else None
                 placement={"before_mod":args.before_mod,"after_mod":args.after_mod,"modlist_top":args.modlist_top,"modlist_bottom":args.modlist_bottom}
-                data=create_plan(Path(args.archive),cfg,PLANS_DIR,args.name,selections,find_7zip(cfg),placement,source_metadata); payload,code=envelope("success",data),0
+                data=create_plan(Path(args.archive),cfg,PLANS_DIR,args.name,selections,find_7zip(cfg),placement,source_metadata)
+                shown=data if args.full_context else {k:v for k,v in data.items() if k!='modlist_context'}
+                if not args.full_context:
+                    context=data.get('modlist_context',{}); shown['modlist_summary']={'target_adjacency':data.get('placement'),'conflict_file_providers':context.get('conflict_file_providers',[]),'plugin_transition':(data.get('profile_transition') or {}).get('plugin_changes',{}),'manual_steps':data.get('layout',{}).get('manual_post_install_steps',[])}
+                payload,code=envelope("success",shown),0
             elif args.install_command in ("apply","resume"):
                 if not args.yes: payload,code=envelope("review",{"plan_id":args.plan_id},["Apply requires --yes after explicit confirmation"]),1
                 else:
@@ -690,17 +714,30 @@ def main(argv: list[str] | None=None) -> int:
             raise ToolError("Legacy mutating updates are disabled; use install inspect, install plan, and install apply",3,
                             {"migration":["install inspect <archive>","install plan <archive> --name <existing-folder>","install apply <plan-id> --yes"]})
         elif args.command=="profile":
-            script="mo2-profile-audit.py" if args.profile_command=="audit" else "mo2-profile-update.py"
-            cfg=load_config(); call=args.args or ([cfg.get("profile","")] if args.profile_command=="audit" else [])
-            if args.profile_command=="audit" or "--dry-run" in call: return run_legacy(script,call+(["--json"] if as_json and args.profile_command=="audit" else []),cfg)
-            if not call: raise ToolError("Profile apply requires a profile name",2)
-            running=__import__("mo2_agent_toolkit.workflow",fromlist=["mo2_running"]).mo2_running()
-            if running: raise ToolError("Close Mod Organizer 2 before changing a profile",3,{"processes":running})
-            tx, manifest=snapshot_profile(cfg,call[0]); os.environ["MO2_TRANSACTION_DIR"] = str(tx)
-            code=run_legacy(script,call,cfg)
-            if code != 0:
-                for entry in manifest["files"]: shutil.copy2(tx/entry["backup"], Path(entry["destination"]))
-            finish_transaction(tx,manifest,"complete" if code==0 else "rolled_back",code); return code
+            cfg=load_config(); profile_name=args.profile or cfg.get("profile","")
+            if not profile_name: raise ToolError("Profile name is required",2)
+            if args.profile_command=="audit": return run_legacy("mo2-profile-audit.py",[profile_name]+(["--json"] if as_json else []),cfg)
+            from .workflow import transform_profile_apply, mo2_running
+            instance=Path(cfg.get("mo2_instance_path","")); profile=instance/"profiles"/profile_name
+            paths={n:profile/n for n in ("modlist.txt","plugins.txt","loadorder.txt")}
+            if not all(x.is_file() for x in paths.values()): raise ToolError("Profile files are missing",2)
+            placement={"before_mod":args.before_mod,"after_mod":args.after_mod,"modlist_top":args.modlist_top,"modlist_bottom":args.modlist_bottom}
+            raw={n:paths[n].read_bytes() for n in paths}; lines={n:paths[n].read_text(encoding="utf-8-sig").splitlines() for n in paths}
+            result=transform_profile_apply(lines["modlist.txt"],lines["plugins.txt"],lines["loadorder.txt"],enable_mod=args.enable_mod,disable_mod=args.disable_mod,enable_plugin=args.enable_plugin,disable_plugin=args.disable_plugin,unregister_plugin=args.unregister_plugin,placement=placement)
+            data={"profile":profile_name,"dry_run":args.dry_run,"changed":result["changed"],"plugin_states":result["plugin_states"]}
+            if args.dry_run: payload,code=envelope("success",data),0
+            else:
+                running=mo2_running()
+                if running and os.environ.get("MO2_PROFILE_UPDATE_ALLOW_RUNNING")!="1": raise ToolError("Close Mod Organizer 2 before changing a profile",3,{"processes":running})
+                tx,manifest=snapshot_profile(cfg,profile_name)
+                try:
+                    for name,key in (("modlist.txt","modlist_lines"),("plugins.txt","plugins_lines"),("loadorder.txt","loadorder_lines")):
+                        paths[name].write_text("\n".join(result[key])+"\n",encoding="utf-8-sig",newline="\n")
+                    check=transform_profile_apply(result["modlist_lines"],result["plugins_lines"],result["loadorder_lines"])
+                    finish_transaction(tx,manifest,"complete",0); data["backup_id"]=tx.name; payload,code=envelope("success",data),0
+                except Exception:
+                    for name,content in raw.items(): paths[name].write_bytes(content)
+                    finish_transaction(tx,manifest,"rolled_back",5); raise
         elif args.command=="npc":
             from . import npc as npc_workflow
             cfg=load_config(); instance=Path(cfg.get("mo2_instance_path","")); profile=cfg.get("profile",""); game=Path(cfg.get("skyrim_game_path",""))/"Data"

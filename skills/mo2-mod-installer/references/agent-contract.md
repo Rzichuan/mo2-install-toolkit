@@ -13,7 +13,7 @@ Inspect, plan, and apply must agree on `layout.nesting_root`, `layout.flatten`, 
 FOMOD archives require explicit stable option IDs in a selections JSON. Never install every file as fallback. A mutation requires MO2 closed; `install resume` may be used after a running-process safety block, with the original explicit confirmation and placement still required.
 
 
-For same-folder updates, preserve exact Mod adjacency and its enabled/disabled marker. Preserve retained plugin states, add newly introduced plugins disabled, and remove disappeared plugins from `plugins.txt` and `loadorder.txt`. Abort on state drift. Any staging, profile, metadata, or content-audit failure restores the old Mod and all three profile files. Legacy mutating install/update commands are safety-blocked; only their read-only dry-run compatibility is allowed.
+For same-folder updates, preserve exact Mod adjacency and its enabled/disabled marker. Preserve retained plugin states including unregistered; add newly introduced plugins disabled only when the mod is enabled (otherwise leave them unregistered), and remove disappeared plugins from `plugins.txt` and `loadorder.txt`. Abort on state drift. Any staging, profile, metadata, or content-audit failure restores the old Mod and all three profile files. Legacy mutating install/update commands are safety-blocked; only their read-only dry-run compatibility is allowed.
 
 ## Other flows
 
@@ -22,3 +22,5 @@ Game-root sequence: doctor, `root inspect`, `root deploy --dry-run`, explicit co
 Non-Premium Nexus sequence: batch prepare, user completes official Slow Download, batch collect, then the ordinary inspect/plan/apply flow. Never automate browser restrictions.
 
 Backup restore requires manifest inspection and explicit confirmation. Post-install generator advice is non-blocking and never executed without a current-turn request.
+
+Profile mutation uses native `profile apply`: mod toggles are in-place unless an explicit anchor is supplied; plugin actions map to enabled/disabled/unregistered. Use `--dry-run --json` before writes. Plan output is concise by default; request `--full-context` only when the complete mod list context is needed.

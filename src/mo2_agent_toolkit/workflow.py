@@ -437,12 +437,23 @@ def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None
     else:
         chosen_placement=_empty_placement(); chosen_placement.update(placement or {})
     modlist_context=_profile_modlist_context(profile); _add_conflict_context(modlist_context,instance,layout.get('_effective_files',[]))
-    data={'schema_version':1,'id':plan_id,'created_at':datetime.now(timezone.utc).isoformat(),'status':'planned',
+    profile_transition=None
+    if existing['operation']=='update':
+        old_plugins=_scan_plugins(instance/'mods'/mod_name)
+        if fomod:
+            candidate=[Path(x.get('destination') or x.get('source','')).name for x in selected_files]
+        else: candidate=[Path(x).name for x in layout.get('_effective_files',[])]
+        new_plugins=sorted({x for x in candidate if Path(x).suffix.casefold() in PLUGIN_SUFFIXES},key=str.casefold)
+        pl,lo,changes,states=transform_update_profile(bool(existing['enabled']),_read_lines(profile/'plugins.txt'),_read_lines(profile/'loadorder.txt'),new_plugins,old_plugins)
+        profile_transition={'plugins':new_plugins,'old_plugins':old_plugins,'plugin_changes':changes,'plugin_states':states,
+          'final_files':{'modlist.txt':_read_lines(profile/'modlist.txt'),'plugins.txt':pl,'loadorder.txt':lo}}
+    data={'schema_version':2,'id':plan_id,'created_at':datetime.now(timezone.utc).isoformat(),'status':'planned',
           'operation':existing['operation'],'archive':str(archive),'archive_sha256':sha256(archive),'mod_name':mod_name,
           'profile':cfg.get('profile',''),'instance':cfg.get('mo2_instance_path',''),'layout':public_layout,
-          'placement':chosen_placement,'existing':existing,'source_metadata':source_metadata,
+          'placement':chosen_placement,'existing':existing,'source_metadata':source_metadata,'profile_transition':profile_transition,
           'modlist_context':modlist_context,'fomod':fomod,'selections':selections,'selected_files':selected_files,
-          'archive_after_install':bool(cfg.get('archive_after_install',False)),'archive_directory':cfg.get('archive_directory','')}
+          'archive_after_install':bool(cfg.get('archive_after_install',False)),'archive_directory':cfg.get('archive_directory',''),
+          'profile_binding':{n:sha256(profile/n) for n in ('modlist.txt','plugins.txt','loadorder.txt')}}
     atomic_json(plans_dir/f'{plan_id}.json',data); return data
 
 def _copy_selected(source:Path,dest:Path,items:list[dict[str,Any]])->None:
@@ -527,6 +538,33 @@ def update_profile(profile:Path,mod_names:list[str],plugins:list[str],placement:
     return placement_result
 
 
+def transform_profile_apply(modlist_lines:list[str],plugin_lines:list[str],loadorder_lines:list[str],*,enable_mod:list[str]=[],disable_mod:list[str]=[],enable_plugin:list[str]=[],disable_plugin:list[str]=[],unregister_plugin:list[str]=[],placement:dict[str,Any]|None=None)->dict[str,Any]:
+    """Pure, strict transformation for the native ``profile apply`` command."""
+    ml=list(modlist_lines); pl=list(plugin_lines); lo=list(loadorder_lines)
+    actions={x.casefold():True for x in enable_mod}; actions.update({x.casefold():False for x in disable_mod})
+    if set(x.casefold() for x in enable_mod)&set(x.casefold() for x in disable_mod): raise WorkflowError('A mod cannot be both enabled and disabled',2)
+    for key,enabled in actions.items():
+        hits=[i for i,x in enumerate(ml) if x.startswith(('+','-')) and _entry_name(x).casefold()==key]
+        if len(hits)>1: raise WorkflowError('Mod entry is duplicated',3,{'mod':key,'matches':hits})
+        if not hits:
+            if not placement or not any(placement.values()): raise WorkflowError('Mod entry is missing and no explicit placement was supplied',3,{'mod':key})
+            name=next((x for x in [*enable_mod,*disable_mod] if x.casefold()==key),key)
+            ml,_=_place_mods(ml,[name],{**placement,'enabled':enabled})
+        else:
+            i=hits[0]; name=_entry_name(ml[i]); ml[i]=('+' if enabled else '-')+name
+            if placement and any(placement.values()):
+                ml.pop(i); ml,_=_place_mods(ml,[name],{**placement,'enabled':enabled})
+    requested=[*enable_plugin,*disable_plugin,*unregister_plugin]
+    if len({x.casefold() for x in requested})!=len(requested): raise WorkflowError('Conflicting plugin actions were requested',2)
+    _profile_plugin_states(pl,lo,requested)
+    for name,state in [*((x,'enabled') for x in enable_plugin),*((x,'disabled') for x in disable_plugin),*((x,'unregistered') for x in unregister_plugin)]:
+        key=name.casefold(); pl=[x for x in pl if x.lstrip('*').casefold()!=key]; lo=[x for x in lo if x.casefold()!=key]
+        if state!='unregistered': pl.append(('*' if state=='enabled' else '')+name); lo.append(name)
+    # Validate all touched entries and exact placement after transformation.
+    states=_profile_plugin_states(pl,lo,requested)
+    return {'modlist_lines':ml,'plugins_lines':pl,'loadorder_lines':lo,'plugin_states':states,
+            'changed':{'modlist.txt':ml!=modlist_lines,'plugins.txt':pl!=plugin_lines,'loadorder.txt':lo!=loadorder_lines}}
+
 def _scan_plugins(root:Path)->list[str]:
     return sorted({item.name for item in root.rglob('*') if item.is_file() and item.suffix.casefold() in PLUGIN_SUFFIXES},key=str.casefold)
 
@@ -541,44 +579,84 @@ def _placement_audit(lines:list[str],mod_name:str)->dict[str,Any]:
             'explanation':'modlist.txt order is the reverse of the MO2 left pane.'}
 
 
-def update_profile_for_update(profile:Path,mod_name:str,new_plugins:list[str],old_plugins:list[str])->tuple[dict[str,Any],dict[str,Any],dict[str,bool]]:
-    plugin_file=profile/'plugins.txt'; loadorder=profile/'loadorder.txt'
-    pl=_unique_entries(_read_lines(plugin_file),'*'); lo=_unique_entries(_read_lines(loadorder),'*')
-    old={name.casefold():name for name in old_plugins}; new={name.casefold():name for name in new_plugins}
-    removed_keys=set(old)-set(new); added_keys=set(new)-set(old)
-    pl=[line for line in pl if line.lstrip('*').casefold() not in removed_keys]
-    lo=[line for line in lo if line.lstrip('*').casefold() not in removed_keys]
-    present_pl={line.lstrip('*').casefold() for line in pl if line and not line.startswith('#')}
-    present_lo={line.lstrip('*').casefold() for line in lo if line and not line.startswith('#')}
-    added_disabled=[]; already_present=[]
-    for key in sorted(added_keys):
-        name=new[key]
-        if key not in present_pl:
-            insertion=max((index for index,line in enumerate(pl) if line.lstrip('*').casefold().endswith('.esm')),default=-1)+1 if name.casefold().endswith('.esm') else len(pl)
-            pl.insert(insertion,name); present_pl.add(key); added_disabled.append(name)
-        else:already_present.append(name)
-        if key not in present_lo:
-            insertion=max((index for index,line in enumerate(lo) if line.casefold().endswith('.esm')),default=-1)+1 if name.casefold().endswith('.esm') else len(lo)
-            lo.insert(insertion,name); present_lo.add(key)
-    plugin_file.write_text('\n'.join(pl)+'\n',encoding='utf-8-sig',newline='\n')
-    loadorder.write_text('\n'.join(lo)+'\n',encoding='utf-8-sig',newline='\n')
-    states={name.casefold():any(line.casefold()==('*'+name).casefold() for line in pl) for name in new_plugins}
-    changes={'preserved_plugins':sorted((new[key] for key in set(new)&set(old)),key=str.casefold),
-             'new_plugins_disabled':sorted(added_disabled,key=str.casefold),'new_plugins_already_present':sorted(already_present,key=str.casefold),
-             'removed_plugins':sorted((old[key] for key in removed_keys),key=str.casefold)}
-    return _placement_audit(_read_lines(profile/'modlist.txt'),mod_name),changes,states
+def _profile_plugin_states(plugin_lines:list[str],loadorder_lines:list[str], relevant:list[str]|None=None)->dict[str,str]:
+    """Parse MO2's two plugin files strictly and return enabled/disabled/unregistered."""
+    wanted={x.casefold():x for x in (relevant or [])}
+    pmap:dict[str,list[str]]={}; lmap:dict[str,list[str]]={}
+    for line in plugin_lines:
+        if not line or line.startswith('#'): continue
+        name=line[1:] if line.startswith('*') else line; pmap.setdefault(name.casefold(),[]).append(line)
+    for line in loadorder_lines:
+        if not line or line.startswith('#'): continue
+        name=line[1:] if line.startswith('*') else line
+        if line.startswith('*'): raise WorkflowError('loadorder.txt contains an activation marker',3,{'repair':f'remove * from {line}'})
+        lmap.setdefault(name.casefold(),[]).append(line)
+    keys=set(wanted) if relevant is not None else set(pmap)|set(lmap)
+    states={}
+    for key in keys:
+        pc=pmap.get(key,[]); lc=lmap.get(key,[]); display=wanted.get(key,key)
+        if len(pc)>1 or len(lc)>1:
+            raise WorkflowError(f'Duplicate plugin registration: {display}',3,{'plugin':display,'plugins_txt':pc,'loadorder_txt':lc})
+        if bool(pc)!=bool(lc):
+            raise WorkflowError(f'Plugin is registered in only one profile file: {display}',3,{'plugin':display,'repair':'add it to both files or remove it from both'})
+        states[key]='enabled' if pc and pc[0].startswith('*') else ('disabled' if pc else 'unregistered')
+    return states
 
 
-def audit_profile(instance:Path,profile:Path,mod_name:str,plugin_states:dict[str,bool],target:Path,expected_enabled:bool=True,removed_plugins:list[str]|None=None)->dict[str,Any]:
+def transform_update_profile(mod_enabled:bool,plugin_lines:list[str],loadorder_lines:list[str],new_plugins:list[str],old_plugins:list[str])->tuple[list[str],list[str],dict[str,Any],dict[str,str]]:
+    """Pure profile transition used by planning and apply."""
+    old={x.casefold():x for x in old_plugins}; new={x.casefold():x for x in new_plugins}
+    states=_profile_plugin_states(plugin_lines,loadorder_lines,list({**old,**new}.values()))
+    retained=set(old)&set(new); removed=set(old)-set(new); added=set(new)-set(old)
+    pl=[x for x in plugin_lines if x.lstrip('*').casefold() not in removed]
+    lo=[x for x in loadorder_lines if x.casefold() not in removed]
+    transitions=[]
+    for key in sorted(retained): transitions.append({'plugin':new[key],'before':states[key],'after':states[key]})
+    for key in sorted(removed): transitions.append({'plugin':old[key],'before':states[key],'after':'unregistered'})
+    added_disabled=[]; added_unregistered=[]
+    for key in sorted(added):
+        name=new[key]; after='disabled' if mod_enabled else 'unregistered'
+        transitions.append({'plugin':name,'before':'unregistered','after':after})
+        if after=='disabled':
+            pi=max((i for i,x in enumerate(pl) if x.lstrip('*').casefold().endswith('.esm')),default=-1)+1 if name.casefold().endswith('.esm') else len(pl)
+            li=max((i for i,x in enumerate(lo) if x.casefold().endswith('.esm')),default=-1)+1 if name.casefold().endswith('.esm') else len(lo)
+            pl.insert(pi,name); lo.insert(li,name); added_disabled.append(name)
+        else: added_unregistered.append(name)
+    final={key:states[key] for key in retained}
+    final.update({key:('disabled' if mod_enabled else 'unregistered') for key in added})
+    changes={'preserved_plugins':sorted((new[k] for k in retained),key=str.casefold),
+      'preserved_unregistered_plugins':sorted((new[k] for k in retained if states[k]=='unregistered'),key=str.casefold),
+      'new_plugins_disabled':added_disabled,'new_plugins_unregistered':added_unregistered,
+      'new_plugins_already_present':[],'removed_plugins':sorted((old[k] for k in removed),key=str.casefold),
+      'plugin_transition':transitions}
+    return pl,lo,changes,final
+
+
+def update_profile_for_update(profile:Path,mod_name:str,new_plugins:list[str],old_plugins:list[str],mod_enabled:bool|None=None)->tuple[dict[str,Any],dict[str,Any],dict[str,str]]:
+    ml=_read_lines(profile/'modlist.txt')
+    if mod_enabled is None:
+        matches=[x for x in ml if x.startswith(('+','-')) and _entry_name(x).casefold()==mod_name.casefold()]
+        if len(matches)!=1: raise WorkflowError('Updated mod is not unique in modlist.txt',3)
+        mod_enabled=matches[0].startswith('+')
+    pl,lo,changes,states=transform_update_profile(mod_enabled,_read_lines(profile/'plugins.txt'),_read_lines(profile/'loadorder.txt'),new_plugins,old_plugins)
+    (profile/'plugins.txt').write_text('\n'.join(pl)+'\n',encoding='utf-8-sig',newline='\n')
+    (profile/'loadorder.txt').write_text('\n'.join(lo)+'\n',encoding='utf-8-sig',newline='\n')
+    return _placement_audit(ml,mod_name),changes,states
+
+def audit_profile(instance:Path,profile:Path,mod_name:str,plugin_states:dict[str,str],target:Path,expected_enabled:bool=True,removed_plugins:list[str]|None=None)->dict[str,Any]:
     issues=[]; ml=_read_lines(profile/'modlist.txt'); pl=_read_lines(profile/'plugins.txt'); lo=_read_lines(profile/'loadorder.txt')
     if not target.is_dir():issues.append({'severity':'error','what':'target mod directory is missing'})
     expected_marker=('+' if expected_enabled else '-')+mod_name
     if sum(line.lstrip('+-').casefold()==mod_name.casefold() for line in ml)!=1 or not any(line.casefold()==expected_marker.casefold() for line in ml):
         issues.append({'severity':'error','what':'mod enable state or uniqueness is invalid'})
-    for plugin_key,enabled in plugin_states.items():
+    for plugin_key,state in plugin_states.items():
         plugin=next((item.name for item in target.rglob('*') if item.is_file() and item.name.casefold()==plugin_key),plugin_key)
         if not any(item.is_file() and item.name.casefold()==plugin_key for item in target.rglob('*')):issues.append({'severity':'error','what':f'plugin output missing: {plugin}'})
         matches=[line for line in pl if line.lstrip('*').casefold()==plugin_key]
+        if state=='unregistered':
+            if matches or any(line.casefold()==plugin_key for line in lo): issues.append({'severity':'error','what':f'plugin should be unregistered: {plugin}'})
+            continue
+        enabled=state=='enabled'
         if len(matches)!=1 or matches[0].startswith('*')!=enabled:issues.append({'severity':'error','what':f'plugin state invalid: {plugin}'})
         if sum(line.casefold()==plugin_key for line in lo)!=1:issues.append({'severity':'error','what':f'loadorder entry invalid: {plugin}'})
     for plugin in removed_plugins or []:
@@ -625,7 +703,9 @@ def _validate_update_state(plan:dict[str,Any],instance:Path,profile:Path)->dict[
 
 
 def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=None)->dict[str,Any]:
-    plan=json.loads(plan_path.read_text(encoding='utf-8-sig')); running=mo2_running()
+    plan=json.loads(plan_path.read_text(encoding='utf-8-sig'))
+    if plan.get('schema_version') != 2: raise WorkflowError('Plan schema is obsolete; please create a new plan',2,{'planned_schema':plan.get('schema_version'),'required_schema':2})
+    running=mo2_running()
     if running: raise WorkflowError('Close Mod Organizer 2 before applying this installation plan',3,{'processes':running,'plan_id':plan['id']})
     if plan.get('status') not in ('planned','rolled_back'):
         raise WorkflowError('Installation plan is not in an applicable state',2,{'status':plan.get('status')})
@@ -633,6 +713,9 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
     if not archive.exists() or sha256(archive)!=plan['archive_sha256']: raise WorkflowError('Archive changed or is missing; create a new plan',2)
     instance=Path(plan['instance']); profile=instance/'profiles'/plan['profile']; target=instance/'mods'/plan['mod_name']
     if not profile.is_dir():raise WorkflowError('Configured profile does not exist',2)
+    binding=plan.get('profile_binding',{})
+    drift={n:{'planned':binding.get(n),'current':sha256(profile/n) if (profile/n).is_file() else None} for n in ('modlist.txt','plugins.txt','loadorder.txt') if binding.get(n)!=(sha256(profile/n) if (profile/n).is_file() else None)}
+    if drift: raise WorkflowError('Profile changed after planning; please create a new plan',3,{'drift':drift})
     operation=plan.get('operation','install')
     if operation=='update':
         if placement and any(placement.values()):raise WorkflowError('Explicit placement is not accepted for an in-place update',2)
@@ -668,12 +751,17 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
         if target.exists():shutil.move(target,tx/'old_mod'); old_moved=True
         target.parent.mkdir(parents=True,exist_ok=True); shutil.move(staged,target); target_committed=True
         if operation=='update':
-            placement_result,plugin_changes,plugin_states=update_profile_for_update(profile,plan['mod_name'],plugins,old_plugins)
+            frozen=plan.get('profile_transition') or {}
+            if sorted(plugins,key=str.casefold)!=sorted(frozen.get('plugins',[]),key=str.casefold): raise WorkflowError('Staged plugins differ from the planned transition',3,{'planned':frozen.get('plugins',[]),'staged':plugins})
+            finals=frozen['final_files']
+            for filename in ('modlist.txt','plugins.txt','loadorder.txt'):
+                (profile/filename).write_text('\n'.join(finals[filename])+'\n',encoding='utf-8-sig',newline='\n')
+            placement_result=_placement_audit(finals['modlist.txt'],plan['mod_name']); plugin_changes=frozen['plugin_changes']; plugin_states=frozen['plugin_states']
             expected_enabled=bool(plan['existing']['enabled'])
         else:
             placement_result=update_profile(profile,[plan['mod_name']],plugins,selected_placement)
             plugin_changes={'preserved_plugins':[],'new_plugins_disabled':[],'new_plugins_already_present':[], 'removed_plugins':[]}
-            plugin_states={name.casefold():True for name in plugins}; expected_enabled=True
+            plugin_states={name.casefold():'enabled' for name in plugins}; expected_enabled=True
         content_audit=_compare_manifests(expected_manifest,_content_manifest(target))
         if content_audit['status']!='passed':raise WorkflowError('Installed files do not match the staged manifest; installation was rolled back',5,content_audit)
         metadata_audit=None
@@ -683,7 +771,7 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
         audit=audit_profile(instance,profile,plan['mod_name'],plugin_states,target,expected_enabled,plugin_changes['removed_plugins'])
         plan['profile_audit']=audit
         if audit['status']!='passed':raise WorkflowError('Profile audit failed; installation was rolled back',5,audit)
-        plan.update(status='complete',plugins=list(plugins),plugins_enabled=sorted((name for name in plugins if plugin_states.get(name.casefold())),key=str.casefold),
+        plan.update(status='complete',plugins=list(plugins),plugins_enabled=sorted((name for name in plugins if plugin_states.get(name.casefold())=='enabled'),key=str.casefold),
                     target=str(target),staged_validation=validation,metadata=metadata_result,metadata_audit=metadata_audit,
                     plugin_changes=plugin_changes,content_audit=content_audit,final_placement=placement_result,
                     manual_advisory='以下操作为建议操作；如你已有自己的处理方案，无需完全参照或执行。')
