@@ -15,13 +15,15 @@ A Windows x64, agent-neutral toolkit for safe Mod Organizer 2 operations. Public
 ```powershell
 bin\mo2-tool.exe plan nexus:12345 --json
 bin\mo2-tool.exe install inspect C:\Downloads\mod.7z --json
-bin\mo2-tool.exe install plan C:\Downloads\mod.7z --json
+bin\mo2-tool.exe install plan C:\Downloads\mod.7z --modid 12345 --file-id 67890 --json
 # Choose an exact anchor from modlist_context, show it to the user, and confirm once:
 bin\mo2-tool.exe install apply <plan-id> --yes --after-mod "—————— 其他模组生成 ——————_separator" --json
 bin\mo2-tool.exe profile audit --json
 ```
 
 Nexus may require non-Premium users to download files manually. The toolkit does not bypass Nexus restrictions.
+
+For Nexus archives, always pass `--modid` and `--file-id` together when planning. The plan freezes the official filename/version/last-modified identity; apply creates or merges `meta.ini` in staging and validates it after commit. A new install requires one explicit placement at apply time. A same-folder update is detected automatically, returns `placement.mode=preserve_existing`, preserves the exact Mod position and enabled/disabled marker, and must be applied without placement flags. Existing plugin states are retained, newly introduced plugins default to disabled, and removed plugins are removed from `plugins.txt` and `loadorder.txt`.
 
 ## Assisted manual Nexus downloads
 
@@ -31,7 +33,10 @@ A free Nexus API key is sufficient for metadata lookup; Premium is not required.
 bin\mo2-tool.exe nexus request 175506 734778 --json
 ```
 
-The command opens the official Nexus file page and watches the current Windows user's browser Downloads known folder for up to 15 minutes. Windows folder redirection is respected; if the known-folder lookup is unavailable, `%USERPROFILE%\Downloads` is used. It ignores browser partial files, matches the exact Nexus filename/File ID/size, waits for the file size to stabilize, runs a 7-Zip integrity test, classifies the archive, and returns the safe next dry-run command. It never clicks the web page, reads browser cookies, bypasses the Slow Download flow, or installs automatically. Use `--downloads-dir <folder>` to monitor a custom folder (including MO2's `downloads/` directory). If no match is found, rerun with the folder containing the downloaded archive. `--no-open-browser`, `--no-wait`, and `--timeout` are also available for scripting.
+The command opens the official Nexus file page and watches the current Windows user's browser Downloads known folder for up to 15 minutes. Windows folder redirection is respected; if the known-folder lookup is unavailable, `%USERPROFILE%\Downloads` is used. It ignores browser partial files, matches the official Nexus filename/File ID/size, waits for the file size to stabilize, runs a 7-Zip integrity test, classifies the archive, and returns the safe next dry-run command. It never clicks the web page, reads browser cookies, bypasses the Slow Download flow, or installs automatically. Use `--downloads-dir <folder>` to monitor a custom folder (including MO2's `downloads/` directory). If no match is found, rerun with the folder containing the downloaded archive. `--no-open-browser`, `--no-wait`, and `--timeout` are also available for scripting.
+
+
+Legacy `install legacy` and top-level `update` remain available only with `--dry-run` for read-only compatibility. Their mutating forms are safety-blocked; ordinary installs and updates must use `install inspect`, `install plan`, and `install apply`.
 
 ## Manual post-install steps
 
@@ -72,12 +77,12 @@ mo2-tool nexus batch prepare nexus:184173 --json
 mo2-tool nexus batch prepare nexus:184173 --include-optional <mod-id> --json
 mo2-tool nexus batch collect <session-id> --json
 mo2-tool install inspect "C:\Users\User\Downloads\mod.zip" --json
-mo2-tool install plan "C:\Users\User\Downloads\mod.zip" --selections selections.json --json
+mo2-tool install plan "C:\Users\User\Downloads\mod.zip" --selections selections.json --modid 184173 --file-id 123456 --json
 # Select one exact placement from modlist_context; after explicit confirmation:
 mo2-tool install apply <plan-id> --yes --after-mod "<exact mod or separator>" --json
 ```
 
-`batch prepare` resolves dependency alternatives and opens required official Nexus pages together; optional dependencies are shown for confirmation and are not opened by default. It returns immediately and does not monitor downloads. After the user says downloads are complete, `batch collect` scans once using Nexus filename, size, file ID, and SHA-256 evidence. FOMOD archives require explicit selections; unsupported conditions stop safely and never fall back to installing every file. Apply is hash-bound, blocks while MO2 runs, requires an exact non-ambiguous placement, validates the flattened staged root, rescans staged plugins, updates and audits the active profile in one transaction, and only archives after commit. Use `archive retry <plan-id>` after a post-commit archive warning.
+`batch prepare` resolves dependency alternatives and opens required official Nexus pages together; optional dependencies are shown for confirmation and are not opened by default. It returns immediately and does not monitor downloads. After the user says downloads are complete, `batch collect` scans once using Nexus filename, size, file ID, and SHA-256 evidence. FOMOD archives require explicit selections; unsupported conditions stop safely and never fall back to installing every file. Apply is hash-bound, blocks while MO2 runs, requires an exact non-ambiguous placement for new installs (and no placement for same-folder updates), validates the flattened staged root, rescans staged plugins, audits committed content by SHA-256, updates and audits the active profile in one transaction, and only archives after commit. Use `archive retry <plan-id>` after a post-commit archive warning.
 
 ## NPC FaceGen conflict workflow
 

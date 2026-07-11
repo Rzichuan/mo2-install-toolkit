@@ -113,7 +113,8 @@ class CliTests(unittest.TestCase):
             payload=json.loads(out.getvalue())
             self.assertEqual(code,0); self.assertEqual(payload["data"]["status"],"verified")
             self.assertIn("install",payload["data"]["recommended_commands"][0])
-            self.assertIn("--modid 123",payload["data"]["recommended_commands"][0])
+            self.assertIn("install inspect",payload["data"]["recommended_commands"][0])
+            self.assertIn("--modid 123 --file-id 456",payload["data"]["recommended_commands"][1])
 
     def test_nexus_request_no_wait_returns_manual_url(self):
         with tempfile.TemporaryDirectory() as td:
@@ -200,5 +201,48 @@ class CliTests(unittest.TestCase):
             (tx/"manifest.json").write_text(json.dumps(manifest),encoding="utf-8")
             with patch.object(cli,"CONFIG_PATH",config): code=cli.main(["backup","restore",tx.name,"--yes","--json"])
             self.assertEqual(code,0); self.assertFalse(created.exists())
+
+
+    def test_install_plan_requires_paired_nexus_ids(self):
+        out=io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code=cli.main(["install","plan","Example.zip","--modid","123","--json"])
+        self.assertEqual(code,2)
+        self.assertIn("provided together",json.loads(out.getvalue())["errors"][0])
+
+    def test_install_plan_freezes_nexus_metadata(self):
+        metadata={"provider":"nexus","mod_id":123,"file_id":456,"file_name":"Official.zip",
+                  "official_filename":"Official.zip","version":"1.2.3"}
+        planned={"id":"plan-1","status":"planned","source_metadata":metadata}
+        with patch.object(cli,"load_config",return_value={}), patch.object(cli,"find_7zip",return_value=None), \
+             patch.object(cli,"_nexus_file_metadata",return_value=metadata), \
+             patch("mo2_agent_toolkit.workflow.create_plan",return_value=planned) as create:
+            out=io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code=cli.main(["install","plan","Example.zip","--modid","123","--file-id","456","--json"])
+        self.assertEqual(code,0); self.assertEqual(json.loads(out.getvalue())["data"]["source_metadata"],metadata)
+        self.assertEqual(create.call_args.args[-1],metadata)
+
+    def test_legacy_mutating_install_and_update_are_blocked(self):
+        with patch.object(cli,"load_config",return_value={}), patch("mo2_agent_toolkit.workflow.fomod_options",return_value=None):
+            install=io.StringIO()
+            with contextlib.redirect_stdout(install):code_install=cli.main(["install","legacy","Missing.zip","--json"])
+            update=io.StringIO()
+            with contextlib.redirect_stdout(update):code_update=cli.main(["update","Missing.zip","--json"])
+        self.assertEqual(code_install,3); self.assertEqual(code_update,3)
+        self.assertIn("install inspect",json.loads(install.getvalue())["errors"][0])
+        self.assertIn("install inspect",json.loads(update.getvalue())["errors"][0])
+
+
+
+    def test_stdio_is_forced_to_utf8_when_reconfigurable(self):
+        class Stream:
+            def __init__(self):self.options=None
+            def reconfigure(self,**options):self.options=options
+        stdout=Stream(); stderr=Stream()
+        with patch.object(cli.sys,"stdout",stdout), patch.object(cli.sys,"stderr",stderr):cli._configure_stdio()
+        self.assertEqual(stdout.options,{"encoding":"utf-8","errors":"replace"})
+        self.assertEqual(stderr.options,{"encoding":"utf-8","errors":"replace"})
+
 
 if __name__ == "__main__": unittest.main()

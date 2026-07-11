@@ -13,7 +13,7 @@ from webbrowser import open_new_tab as open_browser_tab
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -383,9 +383,13 @@ def _nexus_file_metadata(mod_id: int, file_id: int) -> dict[str,Any]:
     if not target: raise ToolError(f"File ID {file_id} was not found for Nexus mod {mod_id}",2)
     size=target.get("size_in_bytes")
     if not size and target.get("size_kb") is not None: size=int(target["size_kb"])*1024
-    return {"mod_id":mod_id,"file_id":file_id,"file_name":target.get("file_name") or f"nexus-{mod_id}-{file_id}",
-            "version":target.get("version"),"category_name":target.get("category_name"),
-            "expected_size_bytes":int(size) if size else None}
+    last_modified=target.get("uploaded_time")
+    if not last_modified and target.get("uploaded_timestamp") is not None:
+        last_modified=datetime.fromtimestamp(int(target["uploaded_timestamp"]),timezone.utc).isoformat().replace("+00:00","Z")
+    official=Path(str(target.get("file_name") or f"nexus-{mod_id}-{file_id}")).name
+    return {"provider":"nexus","mod_id":mod_id,"file_id":file_id,"file_name":official,"official_filename":official,
+            "version":str(target.get("version") or ""),"last_modified":last_modified,
+            "category_name":target.get("category_name"),"expected_size_bytes":int(size) if size else None}
 
 def _download_snapshot(folder: Path) -> dict[str,tuple[int,int]]:
     result={}
@@ -420,13 +424,16 @@ def _test_and_inspect_archive(path: Path, cfg: dict[str,Any]) -> dict[str,Any]:
     from .workflow import inspect_archive
     return inspect_archive(path,seven_zip)
 
-def _recommended_download_commands(path: Path, layout: dict[str,Any], mod_id: int | None = None) -> list[str]:
+def _recommended_download_commands(path: Path, layout: dict[str,Any], mod_id: int | None = None, file_id: int | None = None) -> list[str]:
     quoted=f'"{path}"'
     if layout.get("type")=="root":
         return [f"mo2-tool root inspect {quoted} --json",f"mo2-tool root deploy {quoted} --dry-run --json"]
-    if layout.get("type")=="fomod": return [f"mo2-tool archive inspect {quoted} --json"]
-    metadata = f" --modid {mod_id}" if mod_id is not None else ""
-    return [f"mo2-tool install {quoted}{metadata} --dry-run --json"]
+    metadata = f" --modid {mod_id} --file-id {file_id}" if mod_id is not None and file_id is not None else ""
+    commands=[f"mo2-tool install inspect {quoted} --json"]
+    if layout.get("type")=="fomod":
+        commands.append(f"mo2-tool install plan {quoted} --selections <selections.json>{metadata} --json")
+    else:commands.append(f"mo2-tool install plan {quoted}{metadata} --json")
+    return commands
 
 def handle_nexus_request(args: argparse.Namespace) -> tuple[dict[str,Any],int]:
     cfg=load_config(); instance=Path(cfg.get("mo2_instance_path", ""))
@@ -462,7 +469,7 @@ def handle_nexus_request(args: argparse.Namespace) -> tuple[dict[str,Any],int]:
             path=matches[0]; layout=_test_and_inspect_archive(path,cfg)
             data={**metadata,"status":"verified","path":str(path),"actual_size_bytes":path.stat().st_size,
                   "manual_url":url,"archive_test":"passed","layout":layout,
-                  "recommended_commands":_recommended_download_commands(path,layout,args.mod_id)}
+                  "recommended_commands":_recommended_download_commands(path,layout,args.mod_id,args.file_id)}
             return envelope("success",data),0
         time.sleep(args.poll_interval)
     retry=f'mo2-tool nexus request {args.mod_id} {args.file_id} --downloads-dir "<folder containing the downloaded file>" --json'
@@ -507,7 +514,7 @@ def parser() -> argparse.ArgumentParser:
     rd=rr.add_parser("deploy"); rd.add_argument("archive"); rd.add_argument("--dry-run",action="store_true"); rd.add_argument("--yes",action="store_true"); rd.add_argument("--json",action="store_true")
     ins=sub.add_parser("install"); ii=ins.add_subparsers(dest="install_command",required=True)
     ix=ii.add_parser("inspect"); ix.add_argument("archive"); ix.add_argument("--json",action="store_true")
-    ip=ii.add_parser("plan"); ip.add_argument("archive"); ip.add_argument("--name"); ip.add_argument("--selections"); ip.add_argument("--json",action="store_true")
+    ip=ii.add_parser("plan"); ip.add_argument("archive"); ip.add_argument("--name"); ip.add_argument("--selections"); ip.add_argument("--modid",type=int); ip.add_argument("--file-id",type=int); ip.add_argument("--json",action="store_true")
     placement_group=ip.add_mutually_exclusive_group()
     placement_group.add_argument("--before-mod"); placement_group.add_argument("--after-mod")
     placement_group.add_argument("--modlist-top",action="store_true"); placement_group.add_argument("--modlist-bottom",action="store_true")
@@ -535,7 +542,14 @@ def parser() -> argparse.ArgumentParser:
     internal=sub.add_parser("_legacy"); internal.add_argument("script"); internal.add_argument("args",nargs=argparse.REMAINDER)
     return p
 
+def _configure_stdio() -> None:
+    for stream in (sys.stdout,sys.stderr):
+        reconfigure=getattr(stream,'reconfigure',None)
+        if callable(reconfigure):reconfigure(encoding='utf-8',errors='replace')
+
+
 def main(argv: list[str] | None=None) -> int:
+    _configure_stdio()
     actual=list(argv) if argv is not None else sys.argv[1:]
     if len(actual)>=2 and actual[0]=="install" and actual[1] not in ("inspect","plan","apply","resume","legacy","-h","--help"):
         actual.insert(1,"legacy")
@@ -649,8 +663,10 @@ def main(argv: list[str] | None=None) -> int:
                 selections=None
                 if args.selections:
                     selections=json.loads(Path(args.selections).read_text(encoding="utf-8-sig"))
+                if (args.modid is None)!=(args.file_id is None):raise ToolError("--modid and --file-id must be provided together",2)
+                source_metadata=_nexus_file_metadata(args.modid,args.file_id) if args.modid is not None else None
                 placement={"before_mod":args.before_mod,"after_mod":args.after_mod,"modlist_top":args.modlist_top,"modlist_bottom":args.modlist_bottom}
-                data=create_plan(Path(args.archive),cfg,PLANS_DIR,args.name,selections,find_7zip(cfg),placement); payload,code=envelope("success",data),0
+                data=create_plan(Path(args.archive),cfg,PLANS_DIR,args.name,selections,find_7zip(cfg),placement,source_metadata); payload,code=envelope("success",data),0
             elif args.install_command in ("apply","resume"):
                 if not args.yes: payload,code=envelope("review",{"plan_id":args.plan_id},["Apply requires --yes after explicit confirmation"]),1
                 else:
@@ -664,19 +680,15 @@ def main(argv: list[str] | None=None) -> int:
                 if archive.is_file() and fomod_options(archive,find_7zip(cfg)) is not None: raise ToolError("Legacy installation is blocked for FOMOD archives; use install inspect/plan/apply",3)
                 call=["dry-run" if args.dry_run else "install",args.archive,*args.args]+(["--json"] if as_json else [])
                 if args.dry_run: return run_legacy("mod-install.py",call,cfg)
-                running=__import__("mo2_agent_toolkit.workflow",fromlist=["mo2_running"]).mo2_running()
-                if running: raise ToolError("Close Mod Organizer 2 before installing mods",3,{"processes":running})
-                tx,manifest=prepare_mod_transaction(cfg,"install",args.archive,args.args); os.environ["MO2_TRANSACTION_DIR"]=str(tx)
-                code=run_legacy("mod-install.py",call,cfg); finish_transaction(tx,manifest,"complete" if code==0 else "failed",code); return code
+                raise ToolError("Legacy mutating installs are disabled; use install inspect, install plan, and install apply",3,
+                                {"migration":["install inspect <archive>","install plan <archive>","install apply <plan-id> --yes --<placement>"]})
         elif args.command=="update":
             cfg=load_config()
             if Path(args.archive).is_file() and fomod_options(Path(args.archive),find_7zip(cfg)) is not None: raise ToolError("Legacy update is blocked for FOMOD archives; use install inspect/plan/apply",3)
             call=["dry-run" if args.dry_run else "install",args.archive,*(["--force"] if not args.dry_run else []),*args.args]+(["--json"] if as_json else [])
             if args.dry_run:return run_legacy("mod-install.py",call,cfg)
-            running=__import__("mo2_agent_toolkit.workflow",fromlist=["mo2_running"]).mo2_running()
-            if running:raise ToolError("Close Mod Organizer 2 before updating mods",3,{"processes":running})
-            tx,manifest=prepare_mod_transaction(cfg,"update",args.archive,args.args); os.environ["MO2_TRANSACTION_DIR"]=str(tx)
-            code=run_legacy("mod-install.py",call,cfg); finish_transaction(tx,manifest,"complete" if code==0 else "failed",code); return code
+            raise ToolError("Legacy mutating updates are disabled; use install inspect, install plan, and install apply",3,
+                            {"migration":["install inspect <archive>","install plan <archive> --name <existing-folder>","install apply <plan-id> --yes"]})
         elif args.command=="profile":
             script="mo2-profile-audit.py" if args.profile_command=="audit" else "mo2-profile-update.py"
             cfg=load_config(); call=args.args or ([cfg.get("profile","")] if args.profile_command=="audit" else [])

@@ -12,9 +12,9 @@ Use bundled `mo2-tool` as the only mutation engine. Never edit MO2 profile files
 1. Run `mo2-tool doctor --json`. Resolve configuration first and close MO2 before any mutation.
 2. Resolve Nexus metadata/dependencies when applicable.
 3. Run `mo2-tool install inspect <archive> --json`. Read `layout.nesting_root`, `layout.flatten`, `layout.effective_root_entries`, FOMOD choices, and manual follow-up advice. Route recognized game-root packages to `root inspect/deploy`, never ordinary install.
-4. Run `mo2-tool install plan <archive> [--selections selections.json] --json`. The plan returns current `modlist_context`: file order, separators and positions, conflict providers, related evidence, and the reverse-order explanation.
-5. The tool does not infer priority. Choose exactly one explicit file-direction placement from evidence: `--before-mod <name>`, `--after-mod <name>`, `--modlist-top`, or `--modlist-bottom`.
-6. Present layout, selections, replacement, plugins, and explicit placement to the user. After one explicit confirmation, run `mo2-tool install apply <plan-id> --yes <placement> --json`.
+4. Run `mo2-tool install plan <archive> [--selections selections.json] [--modid <id> --file-id <id>] --json`. For Nexus files, both IDs are required together so the plan freezes official source metadata. The plan returns current `modlist_context`: file order, separators and positions, conflict providers, related evidence, and the reverse-order explanation.
+5. The tool does not infer priority. For a new install, choose exactly one explicit file-direction placement from evidence: `--before-mod <name>`, `--after-mod <name>`, `--modlist-top`, or `--modlist-bottom`. For an auto-detected same-folder update, require `placement.mode=preserve_existing` and do not provide any placement flag.
+6. Present layout, selections, source metadata, operation, plugins, and placement/preservation behavior to the user. After one explicit confirmation, run `mo2-tool install apply <plan-id> --yes <placement> --json` for a new install, or omit `<placement>` for an in-place update.
 7. Read the returned `final_placement` adjacency and `profile_audit`. Run `mo2-tool profile audit --json` for the normal post-write audit.
 
 `before_mod` and `after_mod` are defined in `modlist.txt` file direction. Earlier file lines mean higher MO2 priority and a lower visible left-pane position. The result reports both file-direction neighbors and the corresponding MO2 left-pane neighbors.
@@ -31,7 +31,18 @@ Use bundled `mo2-tool` as the only mutation engine. Never edit MO2 profile files
 - Apply extracts under the transaction directory, applies the planned single-wrapper flattening/FOMOD selection, and validates the final staged root before touching `mods/`.
 - An ordinary mod must expose at least one plugin/BSA or standard Data directory at its final root. Invalid staging returns current root entries, suspected wrappers, and paths to inspect.
 - Plugin activation comes from a fresh scan of the final staged tree, not archive inspection guesses.
+- Nexus `meta.ini` is created or merged in staging, unknown existing keys are preserved, and the official Mod/file IDs, filename, version, and installed-file identity are validated after commit.
+- Committed content (excluding generated `meta.ini`) is compared to the staged SHA-256 manifest before success is reported.
 - Mod replacement, mod activation, plugin activation, load order, placement, and audit are one transaction. Failure restores the old mod plus `modlist.txt`, `plugins.txt`, and `loadorder.txt`.
+
+
+## Same-folder updates
+
+- Identify an update by an exact existing Mod folder/profile entry. Ambiguous, missing, or duplicated identity is a hard stop.
+- Preserve the exact `modlist.txt` position and the existing `+`/`-` state. Reject explicit placement flags and stop if profile adjacency/state drifted since planning.
+- Preserve states for retained plugins. Add newly introduced plugins to `plugins.txt` disabled by default and remove disappeared plugins from both `plugins.txt` and `loadorder.txt`.
+- Treat the old Mod folder, `modlist.txt`, `plugins.txt`, and `loadorder.txt` as one rollback unit. Metadata or content audit failure restores all four.
+- Legacy mutating `install legacy` and top-level `update` are disabled; their `--dry-run` compatibility mode is read-only. Use canonical inspect/plan/apply for mutations.
 
 ## Profile apply
 

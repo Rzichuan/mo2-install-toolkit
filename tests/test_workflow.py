@@ -14,6 +14,7 @@ from mo2_agent_toolkit.workflow import (
     collect_batch,
     create_plan,
     prepare_batch,
+    archive_source,
 )
 
 SEPARATOR = "—————— 其他模组生成 ——————_separator"
@@ -128,12 +129,14 @@ Attributes = A
             root = Path(temp); instance = self.instance(root); archive = root / "Example.zip"; self.archive(archive)
             old = instance / "mods" / "Example"; old.mkdir(); (old / "old.txt").write_text("old", encoding="utf-8")
             profile = instance / "profiles" / "Default"
+            modlist = (profile / "modlist.txt").read_text(encoding="utf-8-sig").replace("+Ordinary Existing", "+Example\n+Ordinary Existing")
+            (profile / "modlist.txt").write_text(modlist, encoding="utf-8-sig", newline="\n")
             originals = {name: (profile / name).read_bytes() for name in ("modlist.txt", "plugins.txt", "loadorder.txt")}
             plan = create_plan(archive, {"mo2_instance_path": str(instance), "profile": "Default"}, root / "plans")
             failed = {"status": "failed", "issues": [{"severity": "error", "what": "forced"}]}
             with patch("mo2_agent_toolkit.workflow.mo2_running", return_value=[]), patch("mo2_agent_toolkit.workflow.audit_profile", return_value=failed):
                 with self.assertRaises(WorkflowError):
-                    apply_plan(root / "plans" / f"{plan['id']}.json", None, self.placement())
+                    apply_plan(root / "plans" / f"{plan['id']}.json", None)
             self.assertEqual((old / "old.txt").read_text(encoding="utf-8"), "old")
             for name, content in originals.items():
                 self.assertEqual((profile / name).read_bytes(), content)
@@ -169,12 +172,97 @@ Attributes = A
             self.assertEqual(result["status"], "installed_with_warnings")
             self.assertTrue((instance / "mods" / plan["mod_name"]).is_dir())
 
+    def test_update_preserves_position_enable_state_and_disables_new_plugin(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/"profiles"/"Default"
+            target=instance/"mods"/"Example"; target.mkdir(); (target/"Old.esp").write_text("old",encoding="utf-8"); (target/"Removed.esp").write_text("old",encoding="utf-8")
+            (target/"meta.ini").write_text("[General]\ncategory=42\nversion=1.0\n",encoding="utf-8")
+            modlist=(profile/"modlist.txt").read_text(encoding="utf-8-sig").replace("+Ordinary Existing","-Example\n+Ordinary Existing")
+            (profile/"modlist.txt").write_text(modlist,encoding="utf-8-sig",newline="\n")
+            (profile/"plugins.txt").write_text(f"{HEADER}\n*Old.esp\n*Removed.esp\n",encoding="utf-8-sig")
+            (profile/"loadorder.txt").write_text(f"{HEADER}\nOld.esp\nRemoved.esp\n",encoding="utf-8-sig")
+            archive=root/"Example.zip"
+            with zipfile.ZipFile(archive,"w") as z:
+                z.writestr("Old.esp","new"); z.writestr("New.esp","new")
+            source={"provider":"nexus","mod_id":133568,"file_id":751019,"official_filename":"Example Official.zip","version":"1.0.9","last_modified":"2026-05-11T10:06:29Z"}
+            plan=create_plan(archive,{"mo2_instance_path":str(instance),"profile":"Default"},root/"plans",source_metadata=source)
+            self.assertEqual(plan["operation"],"update"); self.assertFalse(plan["placement"]["required"])
+            with patch("mo2_agent_toolkit.workflow.mo2_running",return_value=[]):
+                result=apply_plan(root/"plans"/f"{plan['id']}.json",None)
+            self.assertIn("-Example",(profile/"modlist.txt").read_text(encoding="utf-8-sig").splitlines())
+            plugin_lines=(profile/"plugins.txt").read_text(encoding="utf-8-sig").splitlines()
+            self.assertIn("*Old.esp",plugin_lines); self.assertIn("New.esp",plugin_lines); self.assertNotIn("*New.esp",plugin_lines); self.assertNotIn("*Removed.esp",plugin_lines)
+            self.assertNotIn("Removed.esp",(profile/"loadorder.txt").read_text(encoding="utf-8-sig").splitlines())
+            self.assertEqual(result["plugin_changes"]["new_plugins_disabled"],["New.esp"]); self.assertEqual(result["plugin_changes"]["removed_plugins"],["Removed.esp"])
+            self.assertEqual(result["content_audit"]["status"],"passed")
+            meta=(target/"meta.ini").read_text(encoding="utf-8-sig")
+            self.assertIn("category=42",meta); self.assertIn(r"1\fileid=751019",meta); self.assertNotIn("\f",meta)
+
+    def test_update_rejects_state_drift_before_transaction(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/"profiles"/"Default"
+            target=instance/"mods"/"Example"; target.mkdir(); (target/"Test.esp").write_text("old",encoding="utf-8")
+            modlist=(profile/"modlist.txt").read_text(encoding="utf-8-sig").replace("+Ordinary Existing","+Example\n+Ordinary Existing")
+            (profile/"modlist.txt").write_text(modlist,encoding="utf-8-sig",newline="\n")
+            archive=root/"Example.zip"; self.archive(archive)
+            plan=create_plan(archive,{"mo2_instance_path":str(instance),"profile":"Default"},root/"plans")
+            changed=(profile/"modlist.txt").read_text(encoding="utf-8-sig").replace("+Example","-Example")
+            (profile/"modlist.txt").write_text(changed,encoding="utf-8-sig",newline="\n")
+            with patch("mo2_agent_toolkit.workflow.mo2_running",return_value=[]),self.assertRaises(WorkflowError):
+                apply_plan(root/"plans"/f"{plan['id']}.json",None)
+            self.assertFalse((instance/"_agent_toolkit_backups"/plan["id"]).exists())
+
+    def test_archive_source_same_path_is_safe_noop(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); source=root/"Example.zip"; source.write_bytes(b"archive")
+            result=archive_source(source,root)
+            self.assertEqual(result["status"],"already_in_archive"); self.assertTrue(source.exists())
+
+
     def test_batch_collect_by_file_id(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); (root / "CoolMod-12345.zip").write_bytes(b"x")
             data = prepare_batch(10, [12345], root, root / "sessions", False)
             result = collect_batch(root / "sessions" / f"{data['id']}.json")
             self.assertEqual(result["status"], "collected")
+
+
+
+    def test_plan_rejects_malformed_nexus_source_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/"Example.zip"; self.archive(archive)
+            cfg={"mo2_instance_path":str(instance),"profile":"Default"}
+            bad={"provider":"nexus","mod_id":133568,"file_id":751019,"official_filename":"../bad.zip","version":"1.0.9"}
+            with self.assertRaises(WorkflowError) as caught:
+                create_plan(archive,cfg,root/"plans",source_metadata=bad)
+            self.assertIn("safe Windows basename",str(caught.exception))
+
+    def test_content_audit_failure_rolls_back_mod_and_profile(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/"profiles"/"Default"
+            target=instance/"mods"/"Example"; target.mkdir(); (target/"Old.esp").write_text("old",encoding="utf-8")
+            original={name:(profile/name).read_bytes() for name in ("modlist.txt","plugins.txt","loadorder.txt")}
+            modlist=(profile/"modlist.txt").read_text(encoding="utf-8-sig").replace("+Ordinary Existing","+Example\n+Ordinary Existing")
+            (profile/"modlist.txt").write_text(modlist,encoding="utf-8-sig",newline="\n")
+            original={name:(profile/name).read_bytes() for name in ("modlist.txt","plugins.txt","loadorder.txt")}
+            archive=root/"Example.zip"; self.archive(archive)
+            plan=create_plan(archive,{"mo2_instance_path":str(instance),"profile":"Default"},root/"plans")
+            failed={"status":"failed","expected_files":2,"installed_files":1,"missing":["Test.esp"],"extra":[],"different":[]}
+            with patch("mo2_agent_toolkit.workflow.mo2_running",return_value=[]), patch("mo2_agent_toolkit.workflow._compare_manifests",return_value=failed), self.assertRaises(WorkflowError):
+                apply_plan(root/"plans"/f"{plan['id']}.json",None)
+            self.assertEqual((target/"Old.esp").read_text(encoding="utf-8"),"old")
+            for name,content in original.items():self.assertEqual((profile/name).read_bytes(),content)
+            rolled=json.loads((root/"plans"/f"{plan['id']}.json").read_text(encoding="utf-8"))
+            self.assertEqual(rolled["status"],"rolled_back")
+
+    def test_archive_source_uses_unique_collision_suffix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); source_dir=root/"source"; destination=root/"archive"
+            source_dir.mkdir(); destination.mkdir(); source=source_dir/"Example.zip"; source.write_bytes(b"new")
+            (destination/"Example.zip").write_bytes(b"old"); (destination/"Example-42.zip").write_bytes(b"older")
+            result=archive_source(source,destination,"42")
+            self.assertEqual(Path(result["path"]).name,"Example-42-2.zip")
+            self.assertEqual(Path(result["path"]).read_bytes(),b"new")
 
 
 if __name__ == "__main__":

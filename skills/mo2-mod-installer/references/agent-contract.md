@@ -4,13 +4,16 @@ Locate `mo2-tool.exe` under the release `bin` directory or `mo2-tool` on PATH. A
 
 ## Ordinary MO2 installation
 
-Required sequence: `doctor`, `install inspect`, `install plan`, explicit LLM placement, user confirmation, `install apply --yes` with exactly one placement argument, then `profile audit`.
+Required sequence: `doctor`, `install inspect`, `install plan`, operation/placement review, user confirmation, `install apply --yes`, then `profile audit`. Nexus plans pass `--modid` and `--file-id` together and bind official filename/version metadata.
 
-The placement arguments are `--before-mod`, `--after-mod`, `--modlist-top`, and `--modlist-bottom`, all in `modlist.txt` file direction. Do not derive placement from names/categories. Use returned `modlist_context`. For the fixed generated-output separator, ordinary mods go after `—————— 其他模组生成 ——————_separator`; only explicitly identified generated outputs belong in the output group.
+For a new install, exactly one placement argument is required: `--before-mod`, `--after-mod`, `--modlist-top`, or `--modlist-bottom`, all in `modlist.txt` file direction. For an auto-detected same-folder update, `placement.mode` is `preserve_existing`; apply without a placement argument. Do not derive placement from names/categories. Use returned `modlist_context`. For the fixed generated-output separator, ordinary mods go after `—————— 其他模组生成 ——————_separator`; only explicitly identified generated outputs belong in the output group.
 
-Inspect, plan, and apply must agree on `layout.nesting_root`, `layout.flatten`, and `layout.effective_root_entries`. Apply stages and validates before commit, rescans staged plugins, then commits the mod and three profile files as one transaction. Missing/duplicate anchors and invalid staged roots stop without fallback. Audit `final_placement` neighbors after success.
+Inspect, plan, and apply must agree on `layout.nesting_root`, `layout.flatten`, and `layout.effective_root_entries`. Apply stages and validates before commit, rescans staged plugins, creates/merges Nexus `meta.ini`, then commits the Mod and three profile files as one transaction. It validates metadata and a staged SHA-256 content manifest after commit. Missing/duplicate anchors and invalid staged roots stop without fallback. Audit `final_placement` neighbors after success.
 
 FOMOD archives require explicit stable option IDs in a selections JSON. Never install every file as fallback. A mutation requires MO2 closed; `install resume` may be used after a running-process safety block, with the original explicit confirmation and placement still required.
+
+
+For same-folder updates, preserve exact Mod adjacency and its enabled/disabled marker. Preserve retained plugin states, add newly introduced plugins disabled, and remove disappeared plugins from `plugins.txt` and `loadorder.txt`. Abort on state drift. Any staging, profile, metadata, or content-audit failure restores the old Mod and all three profile files. Legacy mutating install/update commands are safety-blocked; only their read-only dry-run compatibility is allowed.
 
 ## Other flows
 

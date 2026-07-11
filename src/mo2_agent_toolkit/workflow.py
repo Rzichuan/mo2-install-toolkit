@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from .metadata import MetadataError, prepare_meta_ini, validate_meta_ini
+
 PARTIAL_SUFFIXES={'.part','.crdownload','.partial','.tmp'}
 ARCHIVE_SUFFIXES={'.zip','.7z','.rar'}
 PLUGIN_SUFFIXES={'.esp','.esm','.esl'}
@@ -345,7 +347,8 @@ def _add_conflict_context(context:dict[str,Any],instance:Path,effective_files:li
     context['conflict_file_providers']=providers
 
 def _empty_placement()->dict[str,Any]:
-    return {'required':True,'before_mod':None,'after_mod':None,'modlist_top':False,'modlist_bottom':False}
+    return {'required':True,'mode':'explicit','before_mod':None,'after_mod':None,'modlist_top':False,'modlist_bottom':False}
+
 
 def _normalize_placement(placement:dict[str,Any]|None)->dict[str,Any]:
     result=_empty_placement(); result.update(placement or {})
@@ -355,7 +358,54 @@ def _normalize_placement(placement:dict[str,Any]|None)->dict[str,Any]:
         raise WorkflowError('Exactly one explicit mod placement is required',2,{'placement':result,'accepted':['before_mod','after_mod','modlist_top','modlist_bottom']})
     return result
 
-def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None,selections:dict[str,list[str]]|None=None,seven_zip:str|None=None,placement:dict[str,Any]|None=None)->dict[str,Any]:
+
+def _existing_install_state(instance:Path,profile:Path,mod_name:str)->dict[str,Any]:
+    lines=_read_lines(profile/'modlist.txt')
+    matches=[index for index,line in enumerate(lines) if line.startswith(('+','-')) and _entry_name(line).casefold()==mod_name.casefold()]
+    target=instance/'mods'/mod_name
+    if len(matches)>1:
+        raise WorkflowError('Existing mod entry is duplicated; update identity is ambiguous',2,{'mod_name':mod_name,'matches':[index+1 for index in matches]})
+    if target.is_dir() != bool(matches):
+        raise WorkflowError('Mod directory and profile entry do not agree; update identity is ambiguous',2,{
+            'mod_name':mod_name,'target_exists':target.is_dir(),'profile_matches':[index+1 for index in matches]})
+    if not matches:
+        return {'operation':'install','target_exists':False}
+    index=matches[0]
+    previous=_entry_name(lines[index-1]) if index>0 and not lines[index-1].startswith('#') else None
+    following=_entry_name(lines[index+1]) if index+1<len(lines) else None
+    return {'operation':'update','target_exists':True,'enabled':lines[index].startswith('+'),'marker':lines[index][0],
+            'file_line':index+1,'previous_mod':previous,'next_mod':following}
+
+
+def _validated_source_metadata(source_metadata:dict[str,Any]|None)->dict[str,Any]:
+    if not source_metadata:
+        return {}
+    result=dict(source_metadata)
+    if result.get('provider')!='nexus':
+        raise WorkflowError('Unsupported source metadata provider',2,{'provider':result.get('provider')})
+    missing=[key for key in ('mod_id','file_id','official_filename','version') if result.get(key) in (None,'')]
+    if missing:
+        raise WorkflowError('Nexus source metadata is incomplete',2,{'missing':missing})
+    try:
+        result['mod_id']=int(result['mod_id']); result['file_id']=int(result['file_id'])
+    except (TypeError,ValueError) as exc:
+        raise WorkflowError('Nexus mod_id and file_id must be integers',2) from exc
+    if result['mod_id']<=0 or result['file_id']<=0:
+        raise WorkflowError('Nexus mod_id and file_id must be positive',2)
+    filename=str(result['official_filename'])
+    invalid_name=(Path(filename).name!=filename or filename in ('.','..') or any(ord(char)<32 for char in filename)
+                  or bool(re.search(r'[<>:\"/\\|?*]',filename)) or filename.rstrip(' .')!=filename)
+    if invalid_name:
+        raise WorkflowError('Nexus official filename must be a safe Windows basename',2,{'official_filename':filename})
+    version=str(result['version'])
+    if any(ord(char)<32 for char in version):
+        raise WorkflowError('Nexus version contains control characters',2)
+    result['official_filename']=filename; result['file_name']=filename; result['version']=version
+    return result
+
+
+def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None,selections:dict[str,list[str]]|None=None,seven_zip:str|None=None,placement:dict[str,Any]|None=None,source_metadata:dict[str,Any]|None=None)->dict[str,Any]:
+    source_metadata=_validated_source_metadata(source_metadata)
     archive=archive.expanduser().resolve()
     if not archive.is_file(): raise WorkflowError('Archive does not exist',2)
     layout=detect_layout(archive_members(archive,seven_zip))
@@ -368,19 +418,31 @@ def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None
     if fomod and fomod['unsupported']: raise WorkflowError('FOMOD contains unsupported expressions; installation was stopped safely',1,{'unsupported':fomod['unsupported']})
     selected_files=list(fomod['required_files']) if fomod else []
     if fomod:
-        for g in fomod['groups']:
-            ids=set(selections.get(g['id'],[])); chosen=[o for o in g['options'] if o['id'] in ids]
-            typ=g['type'].casefold()
-            if typ=='selectexactlyone' and len(chosen)!=1: raise WorkflowError(f"FOMOD group requires exactly one choice: {g['name']}",1)
-            if typ=='selectatleastone' and not chosen: raise WorkflowError(f"FOMOD group requires at least one choice: {g['name']}",1)
-            for o in chosen:selected_files.extend(o['files'])
+        for group in fomod['groups']:
+            ids=set(selections.get(group['id'],[])); chosen=[option for option in group['options'] if option['id'] in ids]
+            typ=group['type'].casefold()
+            if typ=='selectexactlyone' and len(chosen)!=1: raise WorkflowError(f"FOMOD group requires exactly one choice: {group['name']}",1)
+            if typ=='selectatleastone' and not chosen: raise WorkflowError(f"FOMOD group requires at least one choice: {group['name']}",1)
+            for option in chosen:selected_files.extend(option['files'])
     instance=Path(cfg.get('mo2_instance_path','')); profile=instance/'profiles'/cfg.get('profile','')
     if not profile.is_dir():raise WorkflowError('Configured profile does not exist',2)
     plan_id=datetime.now().strftime('%Y%m%d-%H%M%S-')+uuid.uuid4().hex[:8]
     mod_name=name or re.sub(r'[-_](?:v?\d[\w.-]*)$','',archive.stem).strip() or archive.stem
-    chosen_placement=_empty_placement(); chosen_placement.update(placement or {})
+    existing=_existing_install_state(instance,profile,mod_name)
+    if existing['operation']=='update':
+        if any((placement or {}).values()):
+            raise WorkflowError('Explicit placement is not accepted for an in-place update',2,{'mod_name':mod_name})
+        chosen_placement={'required':False,'mode':'preserve_existing','enabled':existing['enabled'],'file_line':existing['file_line'],
+                          'previous_mod':existing['previous_mod'],'next_mod':existing['next_mod']}
+    else:
+        chosen_placement=_empty_placement(); chosen_placement.update(placement or {})
     modlist_context=_profile_modlist_context(profile); _add_conflict_context(modlist_context,instance,layout.get('_effective_files',[]))
-    data={'schema_version':1,'id':plan_id,'created_at':datetime.now(timezone.utc).isoformat(),'status':'planned','archive':str(archive),'archive_sha256':sha256(archive),'mod_name':mod_name,'profile':cfg.get('profile',''),'instance':cfg.get('mo2_instance_path',''),'layout':public_layout,'placement':chosen_placement,'modlist_context':modlist_context,'fomod':fomod,'selections':selections,'selected_files':selected_files,'archive_after_install':bool(cfg.get('archive_after_install',False)),'archive_directory':cfg.get('archive_directory','')}
+    data={'schema_version':1,'id':plan_id,'created_at':datetime.now(timezone.utc).isoformat(),'status':'planned',
+          'operation':existing['operation'],'archive':str(archive),'archive_sha256':sha256(archive),'mod_name':mod_name,
+          'profile':cfg.get('profile',''),'instance':cfg.get('mo2_instance_path',''),'layout':public_layout,
+          'placement':chosen_placement,'existing':existing,'source_metadata':source_metadata,
+          'modlist_context':modlist_context,'fomod':fomod,'selections':selections,'selected_files':selected_files,
+          'archive_after_install':bool(cfg.get('archive_after_install',False)),'archive_directory':cfg.get('archive_directory','')}
     atomic_json(plans_dir/f'{plan_id}.json',data); return data
 
 def _copy_selected(source:Path,dest:Path,items:list[dict[str,Any]])->None:
@@ -452,38 +514,115 @@ def update_profile(profile:Path,mod_names:list[str],plugins:list[str],placement:
     modlist=profile/'modlist.txt'; plugin_file=profile/'plugins.txt'; loadorder=profile/'loadorder.txt'
     ml=_unique_entries(_read_lines(modlist),'+-'); pl=_unique_entries(_read_lines(plugin_file),'*'); lo=_unique_entries(_read_lines(loadorder),'*')
     ml,placement_result=_place_mods(ml,mod_names,placement)
-    wanted={x.casefold():x for x in plugins}
-    pl=[x for x in pl if x.lstrip('*').casefold() not in wanted]
-    lo=[x for x in lo if x.lstrip('*').casefold() not in wanted]
-    esms=[x for x in plugins if x.casefold().endswith('.esm')]; others=[x for x in plugins if x not in esms]
-    pl_esm=max((i for i,x in enumerate(pl) if x.lstrip('*').casefold().endswith('.esm')),default=-1)+1
-    lo_esm=max((i for i,x in enumerate(lo) if x.lstrip('*').casefold().endswith('.esm')),default=-1)+1
-    pl[pl_esm:pl_esm]=['*'+x for x in esms]; lo[lo_esm:lo_esm]=esms
-    pl.extend('*'+x for x in others); lo.extend(others)
+    wanted={name.casefold():name for name in plugins}
+    pl=[line for line in pl if line.lstrip('*').casefold() not in wanted]
+    lo=[line for line in lo if line.lstrip('*').casefold() not in wanted]
+    esms=[name for name in plugins if name.casefold().endswith('.esm')]; others=[name for name in plugins if name not in esms]
+    pl_esm=max((index for index,line in enumerate(pl) if line.lstrip('*').casefold().endswith('.esm')),default=-1)+1
+    lo_esm=max((index for index,line in enumerate(lo) if line.lstrip('*').casefold().endswith('.esm')),default=-1)+1
+    pl[pl_esm:pl_esm]=['*'+name for name in esms]; lo[lo_esm:lo_esm]=esms
+    pl.extend('*'+name for name in others); lo.extend(others)
     for path,lines in ((modlist,ml),(plugin_file,pl),(loadorder,lo)):
         path.write_text('\n'.join(lines)+'\n',encoding='utf-8-sig',newline='\n')
     return placement_result
 
-def audit_profile(instance:Path,profile:Path,mod_name:str,plugins:list[str],target:Path)->dict[str,Any]:
+
+def _scan_plugins(root:Path)->list[str]:
+    return sorted({item.name for item in root.rglob('*') if item.is_file() and item.suffix.casefold() in PLUGIN_SUFFIXES},key=str.casefold)
+
+
+def _placement_audit(lines:list[str],mod_name:str)->dict[str,Any]:
+    matches=[index for index,line in enumerate(lines) if line.startswith(('+','-')) and _entry_name(line).casefold()==mod_name.casefold()]
+    if len(matches)!=1:raise WorkflowError('Updated mod is not unique in modlist.txt',2,{'mod_name':mod_name,'matches':matches})
+    index=matches[0]; previous=_entry_name(lines[index-1]) if index>0 and not lines[index-1].startswith('#') else None
+    following=_entry_name(lines[index+1]) if index+1<len(lines) else None
+    return {'file_direction':{'previous_mod':previous,'new_mods':[mod_name],'next_mod':following},
+            'mo2_left_pane':{'above_mod':following,'new_mods_top_to_bottom':[mod_name],'new_mods_high_to_low_priority':[mod_name],'below_mod':previous},
+            'explanation':'modlist.txt order is the reverse of the MO2 left pane.'}
+
+
+def update_profile_for_update(profile:Path,mod_name:str,new_plugins:list[str],old_plugins:list[str])->tuple[dict[str,Any],dict[str,Any],dict[str,bool]]:
+    plugin_file=profile/'plugins.txt'; loadorder=profile/'loadorder.txt'
+    pl=_unique_entries(_read_lines(plugin_file),'*'); lo=_unique_entries(_read_lines(loadorder),'*')
+    old={name.casefold():name for name in old_plugins}; new={name.casefold():name for name in new_plugins}
+    removed_keys=set(old)-set(new); added_keys=set(new)-set(old)
+    pl=[line for line in pl if line.lstrip('*').casefold() not in removed_keys]
+    lo=[line for line in lo if line.lstrip('*').casefold() not in removed_keys]
+    present_pl={line.lstrip('*').casefold() for line in pl if line and not line.startswith('#')}
+    present_lo={line.lstrip('*').casefold() for line in lo if line and not line.startswith('#')}
+    added_disabled=[]; already_present=[]
+    for key in sorted(added_keys):
+        name=new[key]
+        if key not in present_pl:
+            insertion=max((index for index,line in enumerate(pl) if line.lstrip('*').casefold().endswith('.esm')),default=-1)+1 if name.casefold().endswith('.esm') else len(pl)
+            pl.insert(insertion,name); present_pl.add(key); added_disabled.append(name)
+        else:already_present.append(name)
+        if key not in present_lo:
+            insertion=max((index for index,line in enumerate(lo) if line.casefold().endswith('.esm')),default=-1)+1 if name.casefold().endswith('.esm') else len(lo)
+            lo.insert(insertion,name); present_lo.add(key)
+    plugin_file.write_text('\n'.join(pl)+'\n',encoding='utf-8-sig',newline='\n')
+    loadorder.write_text('\n'.join(lo)+'\n',encoding='utf-8-sig',newline='\n')
+    states={name.casefold():any(line.casefold()==('*'+name).casefold() for line in pl) for name in new_plugins}
+    changes={'preserved_plugins':sorted((new[key] for key in set(new)&set(old)),key=str.casefold),
+             'new_plugins_disabled':sorted(added_disabled,key=str.casefold),'new_plugins_already_present':sorted(already_present,key=str.casefold),
+             'removed_plugins':sorted((old[key] for key in removed_keys),key=str.casefold)}
+    return _placement_audit(_read_lines(profile/'modlist.txt'),mod_name),changes,states
+
+
+def audit_profile(instance:Path,profile:Path,mod_name:str,plugin_states:dict[str,bool],target:Path,expected_enabled:bool=True,removed_plugins:list[str]|None=None)->dict[str,Any]:
     issues=[]; ml=_read_lines(profile/'modlist.txt'); pl=_read_lines(profile/'plugins.txt'); lo=_read_lines(profile/'loadorder.txt')
     if not target.is_dir():issues.append({'severity':'error','what':'target mod directory is missing'})
-    if sum(x.lstrip('+-').casefold()==mod_name.casefold() for x in ml)!=1 or not any(x=='+'+mod_name for x in ml):issues.append({'severity':'error','what':'mod is not uniquely enabled'})
-    for plugin in plugins:
-        if not (target/plugin).exists() and not any(p.name.casefold()==plugin.casefold() for p in target.rglob('*')):issues.append({'severity':'error','what':f'plugin output missing: {plugin}'})
-        if sum(x.lstrip('*').casefold()==plugin.casefold() for x in pl)!=1 or not any(x.casefold()==('*'+plugin).casefold() for x in pl):issues.append({'severity':'error','what':f'plugin not uniquely enabled: {plugin}'})
-        if sum(x.casefold()==plugin.casefold() for x in lo)!=1:issues.append({'severity':'error','what':f'loadorder entry invalid: {plugin}'})
+    expected_marker=('+' if expected_enabled else '-')+mod_name
+    if sum(line.lstrip('+-').casefold()==mod_name.casefold() for line in ml)!=1 or not any(line.casefold()==expected_marker.casefold() for line in ml):
+        issues.append({'severity':'error','what':'mod enable state or uniqueness is invalid'})
+    for plugin_key,enabled in plugin_states.items():
+        plugin=next((item.name for item in target.rglob('*') if item.is_file() and item.name.casefold()==plugin_key),plugin_key)
+        if not any(item.is_file() and item.name.casefold()==plugin_key for item in target.rglob('*')):issues.append({'severity':'error','what':f'plugin output missing: {plugin}'})
+        matches=[line for line in pl if line.lstrip('*').casefold()==plugin_key]
+        if len(matches)!=1 or matches[0].startswith('*')!=enabled:issues.append({'severity':'error','what':f'plugin state invalid: {plugin}'})
+        if sum(line.casefold()==plugin_key for line in lo)!=1:issues.append({'severity':'error','what':f'loadorder entry invalid: {plugin}'})
+    for plugin in removed_plugins or []:
+        key=plugin.casefold()
+        if any(line.lstrip('*').casefold()==key for line in pl) or any(line.casefold()==key for line in lo):
+            issues.append({'severity':'error','what':f'removed plugin remains configured: {plugin}'})
     for label,lines,prefix in (('modlist',ml,'+-'),('plugins',pl,'*'),('loadorder',lo,'')):
-        keys=[x.lstrip(prefix).casefold() for x in lines if x and not x.startswith('#')]
+        keys=[line.lstrip(prefix).casefold() for line in lines if line and not line.startswith('#')]
         if len(keys)!=len(set(keys)):issues.append({'severity':'error','what':f'duplicate {label} entries'})
     return {'status':'passed' if not issues else 'failed','issues':issues}
 
+
+def _content_manifest(root:Path)->dict[str,str]:
+    return {item.relative_to(root).as_posix():sha256(item) for item in root.rglob('*') if item.is_file() and item.name.casefold()!='meta.ini'}
+
+
+def _compare_manifests(expected:dict[str,str],actual:dict[str,str])->dict[str,Any]:
+    missing=sorted(set(expected)-set(actual),key=str.casefold); extra=sorted(set(actual)-set(expected),key=str.casefold)
+    different=sorted((name for name in set(expected)&set(actual) if expected[name]!=actual[name]),key=str.casefold)
+    return {'status':'passed' if not (missing or extra or different) else 'failed','expected_files':len(expected),
+            'installed_files':len(actual),'missing':missing,'extra':extra,'different':different}
+
 def archive_source(source:Path,destination:Path,file_id:str|None=None)->dict[str,Any]:
-    destination.mkdir(parents=True,exist_ok=True); target=destination/source.name
+    source=source.expanduser().resolve(); destination=destination.expanduser().resolve(); target=(destination/source.name).resolve()
+    if source==target or (target.exists() and source.exists() and os.path.samefile(source,target)):
+        return {'status':'already_in_archive','path':str(source)}
+    destination.mkdir(parents=True,exist_ok=True)
     if target.exists():
-        if sha256(target)==sha256(source): source.unlink(); return {'status':'deduplicated','path':str(target)}
-        suffix=f'-{file_id}' if file_id else datetime.now().strftime('-%Y%m%d-%H%M%S')
-        target=destination/f'{source.stem}{suffix}{source.suffix}'
+        if sha256(target)==sha256(source):
+            source.unlink(); return {'status':'deduplicated','path':str(target)}
+        base_suffix=f'-{file_id}' if file_id else datetime.now().strftime('-%Y%m%d-%H%M%S')
+        candidate=destination/f'{source.stem}{base_suffix}{source.suffix}'; counter=2
+        while candidate.exists():
+            candidate=destination/f'{source.stem}{base_suffix}-{counter}{source.suffix}'; counter+=1
+        target=candidate
     shutil.move(str(source),target); return {'status':'moved','path':str(target)}
+
+def _validate_update_state(plan:dict[str,Any],instance:Path,profile:Path)->dict[str,Any]:
+    current=_existing_install_state(instance,profile,plan['mod_name']); planned=plan.get('existing') or {}
+    fields=('operation','enabled','file_line','previous_mod','next_mod')
+    mismatches={field:{'planned':planned.get(field),'current':current.get(field)} for field in fields if planned.get(field)!=current.get(field)}
+    if mismatches:raise WorkflowError('Existing mod placement or state changed after planning',2,{'mismatches':mismatches})
+    return current
+
 
 def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=None)->dict[str,Any]:
     plan=json.loads(plan_path.read_text(encoding='utf-8-sig')); running=mo2_running()
@@ -492,15 +631,18 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
         raise WorkflowError('Installation plan is not in an applicable state',2,{'status':plan.get('status')})
     archive=Path(plan['archive'])
     if not archive.exists() or sha256(archive)!=plan['archive_sha256']: raise WorkflowError('Archive changed or is missing; create a new plan',2)
-    selected_placement=dict(plan.get('placement') or {})
-    if placement:selected_placement.update(placement)
-    selected_placement=_normalize_placement(selected_placement)
     instance=Path(plan['instance']); profile=instance/'profiles'/plan['profile']; target=instance/'mods'/plan['mod_name']
     if not profile.is_dir():raise WorkflowError('Configured profile does not exist',2)
-    # Validate the anchor against current state before extracting or moving anything.
-    _place_mods(_read_lines(profile/'modlist.txt'),[plan['mod_name']],selected_placement)
-    current_layout=detect_layout(archive_members(archive,seven_zip))
-    planned_layout=plan.get('layout') or {}
+    operation=plan.get('operation','install')
+    if operation=='update':
+        if placement and any(placement.values()):raise WorkflowError('Explicit placement is not accepted for an in-place update',2)
+        _validate_update_state(plan,instance,profile); selected_placement=dict(plan['placement'])
+    else:
+        selected_placement=dict(plan.get('placement') or {})
+        if placement:selected_placement.update(placement)
+        selected_placement=_normalize_placement(selected_placement)
+        _place_mods(_read_lines(profile/'modlist.txt'),[plan['mod_name']],selected_placement)
+    current_layout=detect_layout(archive_members(archive,seven_zip)); planned_layout=plan.get('layout') or {}
     for key in ('nesting_root','flatten','type'):
         if planned_layout.get(key)!=current_layout.get(key):
             raise WorkflowError('Archive layout no longer matches the installation plan',2,{'field':key,'planned':planned_layout.get(key),'current':current_layout.get(key)})
@@ -512,25 +654,43 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
             if not profile_file.is_file():raise WorkflowError(f'Missing profile file: {profile_file}',2)
             backup=tx/profile_file.name; shutil.copy2(profile_file,backup); snapshots.append((profile_file,backup))
         extracted=tx/'x'; extracted.mkdir(); _extract(archive,extracted,seven_zip)
-        # Keep transaction-internal names short and never repeat the user-facing mod name.
         staged=tx/'s'; staged.mkdir()
         if plan.get('fomod'):
             source=extracted/Path(current_layout['nesting_root']) if current_layout.get('flatten') else extracted
             _copy_selected(source,staged,plan['selected_files'])
         else:_stage_effective_root(extracted,staged,current_layout)
-        validation=validate_staged_mod(staged)
-        # Plugin inventory is authoritative only after final flattening/selection.
-        plugins=validation['plugins']
+        validation=validate_staged_mod(staged); plugins=validation['plugins']
+        old_plugins=_scan_plugins(target) if target.is_dir() else []
+        try:
+            metadata_result=prepare_meta_ini(staged,target/'meta.ini' if target.is_dir() else None,plan.get('source_metadata'))
+        except MetadataError as exc:raise WorkflowError(f'Metadata validation failed: {exc}',2) from exc
+        expected_manifest=_content_manifest(staged)
         if target.exists():shutil.move(target,tx/'old_mod'); old_moved=True
         target.parent.mkdir(parents=True,exist_ok=True); shutil.move(staged,target); target_committed=True
-        placement_result=update_profile(profile,[plan['mod_name']],plugins,selected_placement)
-        audit=audit_profile(instance,profile,plan['mod_name'],plugins,target); plan['profile_audit']=audit
+        if operation=='update':
+            placement_result,plugin_changes,plugin_states=update_profile_for_update(profile,plan['mod_name'],plugins,old_plugins)
+            expected_enabled=bool(plan['existing']['enabled'])
+        else:
+            placement_result=update_profile(profile,[plan['mod_name']],plugins,selected_placement)
+            plugin_changes={'preserved_plugins':[],'new_plugins_disabled':[],'new_plugins_already_present':[], 'removed_plugins':[]}
+            plugin_states={name.casefold():True for name in plugins}; expected_enabled=True
+        content_audit=_compare_manifests(expected_manifest,_content_manifest(target))
+        if content_audit['status']!='passed':raise WorkflowError('Installed files do not match the staged manifest; installation was rolled back',5,content_audit)
+        metadata_audit=None
+        if (target/'meta.ini').is_file():
+            try:metadata_audit=validate_meta_ini(target/'meta.ini',plan.get('source_metadata'))
+            except MetadataError as exc:raise WorkflowError(f'Metadata audit failed: {exc}',5) from exc
+        audit=audit_profile(instance,profile,plan['mod_name'],plugin_states,target,expected_enabled,plugin_changes['removed_plugins'])
+        plan['profile_audit']=audit
         if audit['status']!='passed':raise WorkflowError('Profile audit failed; installation was rolled back',5,audit)
-        plan.update(status='complete',plugins_enabled=plugins,target=str(target),staged_validation=validation,
-                    final_placement=placement_result,manual_advisory='以下操作为建议操作；如你已有自己的处理方案，无需完全参照或执行。')
+        plan.update(status='complete',plugins=list(plugins),plugins_enabled=sorted((name for name in plugins if plugin_states.get(name.casefold())),key=str.casefold),
+                    target=str(target),staged_validation=validation,metadata=metadata_result,metadata_audit=metadata_audit,
+                    plugin_changes=plugin_changes,content_audit=content_audit,final_placement=placement_result,
+                    manual_advisory='以下操作为建议操作；如你已有自己的处理方案，无需完全参照或执行。')
         if extracted.exists():shutil.rmtree(extracted,ignore_errors=True)
         atomic_json(tx/'manifest.json',{'status':'complete','plan_id':plan['id'],'snapshots':[str(item[0]) for item in snapshots],
-                                       'old_mod':str(tx/'old_mod') if old_moved else None,'final_placement':placement_result})
+                    'old_mod':str(tx/'old_mod') if old_moved else None,'final_placement':placement_result,
+                    'metadata':metadata_result,'plugin_changes':plugin_changes,'content_audit':content_audit})
         atomic_json(plan_path,plan); committed=True
     except Exception:
         if not committed:
@@ -540,9 +700,8 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
             for destination,backup in snapshots:shutil.copy2(backup,destination)
             plan['status']='rolled_back'; atomic_json(plan_path,plan); atomic_json(tx/'manifest.json',{'status':'rolled_back','plan_id':plan.get('id')})
         raise
-    # Archiving is deliberately post-commit and can never roll back a valid install.
     if plan.get('archive_after_install') and plan.get('archive_directory'):
-        try:plan['archive_result']=archive_source(archive,Path(plan['archive_directory'])); atomic_json(plan_path,plan)
+        try:plan['archive_result']=archive_source(archive,Path(plan['archive_directory']),str((plan.get('source_metadata') or {}).get('file_id') or '')); atomic_json(plan_path,plan)
         except Exception as exc:
             plan['status']='installed_with_warnings'; plan['archive_result']={'status':'warning','error':str(exc),'source':str(archive)}; atomic_json(plan_path,plan)
     return plan

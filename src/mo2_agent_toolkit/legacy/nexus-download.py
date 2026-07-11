@@ -215,17 +215,16 @@ def cmd_download(mod_id, file_id, output_dir, name=None, json_out=False):
         die(f"File ID {file_id} not found in mod {mod_id}")
 
     file_name = target.get("file_name", "unknown")
-    mod_name = name or file_name.rsplit("-", 2)[0]  # Heuristic: strip trailing -modid-fileid
-    ext = file_name.rsplit(".", 1)[-1] if "." in file_name else "7z"
-
-    dest_name = build_filename(mod_name, mod_id, file_id, ext)
+    # Nexus file_name is authoritative. Only remove Windows-invalid path characters.
+    official_name = os.path.basename(str(file_name).replace("\\", "/"))
+    dest_name = re.sub(r'[<>:"/\\|?*]', '', official_name).strip() or f"nexus-{mod_id}-{file_id}.7z"
     dest_path = os.path.join(output_dir, dest_name)
 
-    # Check if already downloaded
-    existing = find_existing_file(mod_id, file_id)
+    # Prefer the exact official name, while retaining compatibility with older constructed names.
+    existing = dest_path if os.path.isfile(dest_path) else find_existing_file(mod_id, file_id)
     if existing:
         if json_out:
-            print(json.dumps({"status": "already_downloaded", "path": existing, "size": os.path.getsize(existing)}))
+            print(json.dumps({"status": "already_downloaded", "path": existing, "size": os.path.getsize(existing), "mod_id": mod_id, "file_id": file_id, "official_filename": dest_name, "version": target.get("version", "")}))
         else:
             print(f"Already downloaded: {existing}")
         return
@@ -242,7 +241,7 @@ def cmd_download(mod_id, file_id, output_dir, name=None, json_out=False):
     if success:
         size_mb = os.path.getsize(dest_path) / (1024 * 1024)
         if json_out:
-            print(json.dumps({"status": "downloaded", "path": dest_path, "size_bytes": os.path.getsize(dest_path), "method": method}))
+            print(json.dumps({"status": "downloaded", "path": dest_path, "size_bytes": os.path.getsize(dest_path), "method": method, "mod_id": mod_id, "file_id": file_id, "official_filename": dest_name, "version": target.get("version", "")}))
         else:
             print(f"  Downloaded ({size_mb:.1f} MB)")
     else:
