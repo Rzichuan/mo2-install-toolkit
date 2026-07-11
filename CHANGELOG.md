@@ -1,5 +1,7 @@
 ## 0.6.0
 
+- Packaged the Skill instructions and complete PyInstaller runtime as one shared, self-contained Bundle for Claude Code and Codex.
+- Added transactional adapter installation with stable `%LOCALAPPDATA%` deployment, junction migration, backups, and managed uninstall.
 - Added Nexus file metadata freezing and safe `meta.ini` create/merge/validation, including literal installed-file IDs.
 - Added same-folder update plans that preserve Mod position and enabled state, preserve existing plugin states, disable newly introduced plugins, and remove retired plugin entries.
 - Added SHA-256 post-commit content audits with rollback of the old Mod and all three profile files on failure.

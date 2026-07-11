@@ -1,13 +1,30 @@
-[CmdletBinding(SupportsShouldProcess)] param()
+[CmdletBinding(SupportsShouldProcess)] param(
+  [string]$LocalAppDataRoot = $env:LOCALAPPDATA
+)
 $ErrorActionPreference = 'Stop'
-$Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$Manifest = Join-Path $Root '.adapter-install.json'
-if (-not (Test-Path -LiteralPath $Manifest)) { Write-Output 'No adapter installation manifest found.'; exit 0 }
-$AllowedRoots = @((Join-Path $HOME '.codex\skills'), (Join-Path $HOME '.claude\skills')) | ForEach-Object { [IO.Path]::GetFullPath($_) }
-$Data = Get-Content -Raw -LiteralPath $Manifest -Encoding UTF8 | ConvertFrom-Json
-foreach ($Path in $Data.paths) {
-  $Resolved = [IO.Path]::GetFullPath([string]$Path)
-  if (-not ($AllowedRoots | Where-Object { $Resolved.StartsWith($_ + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) })) { throw "Refusing path outside agent skill roots: $Resolved" }
-  if ((Test-Path -LiteralPath $Resolved) -and $PSCmdlet.ShouldProcess($Resolved, 'Remove installed adapter')) { Remove-Item -LiteralPath $Resolved -Recurse -Force }
+if (-not $LocalAppDataRoot) { throw 'LOCALAPPDATA is unavailable; pass -LocalAppDataRoot explicitly.' }
+$ToolkitData = [IO.Path]::GetFullPath((Join-Path $LocalAppDataRoot 'MO2AgentToolkit'))
+$Manifest = Join-Path $ToolkitData 'adapter-install.json'
+if (-not (Test-Path -LiteralPath $Manifest -PathType Leaf)) { Write-Output 'No managed adapter installation manifest found.'; exit 0 }
+$Data = Get-Content -LiteralPath $Manifest -Encoding UTF8 -Raw | ConvertFrom-Json
+$Bundle = [IO.Path]::GetFullPath([string]$Data.bundle)
+if (-not $Bundle.StartsWith($ToolkitData + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Refusing bundle outside toolkit data root: $Bundle" }
+$ValidatedAdapters = @()
+foreach ($Adapter in $Data.adapters) {
+  $Path = [IO.Path]::GetFullPath([string]$Adapter.path)
+  $Root = [IO.Path]::GetFullPath([string]$Adapter.root)
+  if (-not $Path.StartsWith($Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Refusing adapter outside recorded skill root: $Path" }
+  $Item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  if ($Item) {
+    $Target = if ($Item.Target) { [IO.Path]::GetFullPath([string]@($Item.Target)[0]) } else { $null }
+    if ($Item.LinkType -ne 'Junction' -or -not $Target -or -not $Target.Equals($Bundle, [StringComparison]::OrdinalIgnoreCase)) { throw "Refusing to remove unmanaged or changed adapter: $Path" }
+    $ValidatedAdapters += $Path
+  }
 }
-if ($PSCmdlet.ShouldProcess($Manifest, 'Remove installation manifest')) { Remove-Item -LiteralPath $Manifest -Force }
+foreach ($Path in $ValidatedAdapters) {
+  if ($PSCmdlet.ShouldProcess($Path, 'Remove managed adapter junction')) { Remove-Item -LiteralPath $Path -Force }
+}
+if (Test-Path -LiteralPath $Bundle) {
+  if ($PSCmdlet.ShouldProcess($Bundle, 'Remove managed MO2 Skill Bundle')) { Remove-Item -LiteralPath $Bundle -Recurse -Force }
+}
+if ($PSCmdlet.ShouldProcess($Manifest, 'Remove adapter installation manifest')) { Remove-Item -LiteralPath $Manifest -Force }

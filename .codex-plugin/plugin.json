@@ -1,6 +1,6 @@
 {
   "name": "mo2-agent-toolkit",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Agent-neutral safety-first MO2 installation toolkit",
   "author": {
     "name": "MO2 Agent Toolkit contributors"

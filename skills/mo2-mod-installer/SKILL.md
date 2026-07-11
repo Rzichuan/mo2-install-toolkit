@@ -5,7 +5,15 @@ description: Safely inspect, plan, install, update, validate, back up, or restor
 
 # MO2 Mod Installer
 
-Use bundled `mo2-tool` as the only mutation engine. Never edit MO2 profile files or move installed mods directly.
+Use the `bin/mo2-tool.exe` shipped inside this loaded Skill Bundle as the only mutation engine. Never edit MO2 profile files or move installed mods directly.
+
+## Tool location
+
+- `bin` is relative to the directory containing this `SKILL.md`, never to the shell's current working directory.
+- Claude Code must invoke `$HOME/.claude/skills/mo2-mod-installer/bin/mo2-tool.exe`; Codex must invoke `$HOME/.codex/skills/mo2-mod-installer/bin/mo2-tool.exe`. Resolve the full absolute path before the first command and keep using that exact executable.
+- On Windows always include `.exe`. Never call `bin/mo2-tool`, search a source checkout's `dist` directory, copy the executable, or fall back to another `mo2-tool` on `PATH`.
+- Require `bin/mo2-tool.exe` and `bin/_internal` to exist. If either is missing, stop and report a damaged Bundle rather than attempting repair during a mod operation.
+- Command examples below abbreviate the resolved absolute executable as `mo2-tool`; substitute the full Skill path when executing them.
 
 ## Required installation flow
 

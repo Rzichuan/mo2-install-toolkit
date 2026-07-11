@@ -16,3 +16,5 @@ $Patcher = (Resolve-Path -LiteralPath (Join-Path $Root '..\npc-agent-patcher\bin
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 & (Join-Path $Root 'dist\mo2-tool\mo2-tool.exe') --version
 if ($LASTEXITCODE -ne 0) { throw 'Built executable smoke test failed' }
+& (Join-Path $Root 'scripts\build-bundle.ps1') -ToolDirectory (Join-Path $Root 'dist\mo2-tool') -OutputDirectory (Join-Path $Root 'dist\mo2-mod-installer-bundle')
+if ($LASTEXITCODE -ne 0) { throw 'Skill Bundle build failed' }
