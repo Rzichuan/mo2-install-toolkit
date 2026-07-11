@@ -1,0 +1,32 @@
+{
+  "name": "mo2-agent-toolkit",
+  "version": "0.5.0",
+  "description": "Agent-neutral safety-first MO2 installation toolkit",
+  "author": {
+    "name": "MO2 Agent Toolkit contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "skyrim",
+    "mo2",
+    "mod-organizer",
+    "agent"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "MO2 Agent Toolkit",
+    "shortDescription": "Safely manage Skyrim mods in MO2",
+    "longDescription": "Plan, install, update, audit, back up, and restore Mod Organizer 2 mods through a standalone Windows tool.",
+    "developerName": "MO2 Agent Toolkit contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Audit my active MO2 profile safely.",
+      "Plan this Nexus mod installation.",
+      "Update this mod with a recoverable backup."
+    ]
+  }
+}

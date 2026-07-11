@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mo2-agent-toolkit"
+version = "0.5.0"
+description = "Agent-neutral, safety-first Mod Organizer 2 toolkit"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "MO2 Agent Toolkit contributors"}]
+dependencies = []
+
+[project.scripts]
+mo2-tool = "mo2_agent_toolkit.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mo2_agent_toolkit = ["legacy/*.py"]

@@ -1,0 +1,4 @@
+interface:
+  display_name: "MO2 Agent Toolkit"
+  short_description: "Safely plan, install, update, audit, and restore MO2 mods"
+  default_prompt: "Use $mo2-mod-installer and the bundled mo2-tool CLI to plan and safely perform this MO2 mod operation."

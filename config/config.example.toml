@@ -1,0 +1,5 @@
+schema_version = 1
+mo2_instance_path = "C:/Path/To/MO2/Instance"
+profile = "Default"
+skyrim_game_path = "C:/Path/To/Skyrim Special Edition"
+seven_zip_path = ""

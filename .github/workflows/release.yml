@@ -1,0 +1,39 @@
+name: test-and-release
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -X utf8 -m unittest discover -s tests -v
+      - run: python -X utf8 -m pip install -r requirements-build.txt
+      - shell: powershell
+        run: ./scripts/build.ps1
+      - shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force release/mo2-agent-toolkit/bin | Out-Null
+          Copy-Item dist/mo2-tool/* release/mo2-agent-toolkit/bin -Recurse
+          Copy-Item .codex-plugin,skills,claude,scripts,config,assets -Destination release/mo2-agent-toolkit -Recurse
+          Copy-Item AGENTS.md,README.md,LICENSE,CHANGELOG.md,THIRD_PARTY_NOTICES.md -Destination release/mo2-agent-toolkit
+          Compress-Archive release/mo2-agent-toolkit release/mo2-agent-toolkit-v0.2.0-win-x64.zip
+          (Get-FileHash release/mo2-agent-toolkit-v0.2.0-win-x64.zip -Algorithm SHA256).Hash + '  mo2-agent-toolkit-v0.2.0-win-x64.zip' | Set-Content release/SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: release/*
+      - if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/mo2-agent-toolkit-v0.2.0-win-x64.zip
+            release/SHA256SUMS.txt

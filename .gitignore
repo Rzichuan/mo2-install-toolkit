@@ -1,0 +1,14 @@
+.env
+secrets/
+**/__pycache__/
+*.py[cod]
+*.log
+build/
+dist/
+.venv/
+.pytest_cache/
+*.egg-info/
+.coverage
+htmlcov/
+mo2-tool.spec
+_agent_toolkit_backups/
