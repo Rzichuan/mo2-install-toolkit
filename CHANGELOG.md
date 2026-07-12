@@ -1,3 +1,9 @@
+## 0.7.2 - 2026-07-12
+
+- Reject FOMOD source and destination paths that are absolute, drive-relative, UNC, traversal, ADS-like, or escape staging boundaries.
+- Resolve FOMOD file dependencies against enabled mods, MO2 Overwrite, and a validated game Data directory; stop safely when a missing dependency is ambiguous.
+- Capture PyFomod parser and structural validation warnings, block critical repairs, and bind the dependency environment through Apply.
+
 ## 0.7.1 - 2026-07-12
 
 - Replaced the limited in-house FOMOD evaluator with vendored `pyfomod 1.2.1` (Apache-2.0), including page visibility, dependency-based option types, conditional installs, flags, ordering, priorities, and selection validation.

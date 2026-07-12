@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib, json, os, re, shutil, subprocess, tempfile, uuid, zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -313,24 +313,36 @@ def _game_version(cfg:dict[str,Any])->str|None:
     except Exception:return None
 
 
-def _fomod_file_type(instance:Path,profile:Path,cfg:dict[str,Any]):
+def _fomod_file_environment(instance:Path,profile:Path,cfg:dict[str,Any]):
     from ._vendor.pyfomod import FileType
-    enabled=[]
+    roots=[]
     for line in _read_lines(profile/'modlist.txt'):
         if line.startswith('+'):
             path=instance/'mods'/line[1:]
-            if path.is_dir():enabled.append(path)
-    game_data=Path(cfg.get('skyrim_game_path',''))/'Data' if cfg.get('skyrim_game_path') else None
+            if path.is_dir():roots.append(('mod',path))
+    overwrite=instance/'overwrite'
+    if overwrite.is_dir():roots.append(('overwrite',overwrite))
+    configured_root=Path(cfg.get('skyrim_game_path','')) if cfg.get('skyrim_game_path') else None
+    game_data=configured_root/'Data' if configured_root else None
+    game_data_valid=bool(game_data and game_data.is_dir())
+    if game_data_valid:roots.append(('game_data',game_data))
     active={line[1:].casefold() for line in _read_lines(profile/'plugins.txt') if line.startswith('*')}
 
-    def state(name:str):
-        rel=Path(name.replace('\\','/').lstrip('/'))
-        if rel.is_absolute() or '..' in rel.parts:return FileType.MISSING
-        exists=bool(game_data and (game_data/rel).is_file()) or any((mod/rel).is_file() for mod in enabled)
-        if not exists:return FileType.MISSING
-        if rel.suffix.casefold() in PLUGIN_SUFFIXES and rel.name.casefold() not in active:return FileType.INACTIVE
-        return FileType.ACTIVE
-    return state
+    def inspect(name:str):
+        try:rel=_safe_relative_path(name,'FOMOD file dependency')
+        except WorkflowError:return {'state':FileType.MISSING,'providers':[],'invalid_path':True}
+        providers=[kind for kind,root in roots if (root/rel).is_file()]
+        if not providers:return {'state':FileType.MISSING,'providers':[],'invalid_path':False}
+        state=FileType.ACTIVE
+        if rel.suffix.casefold() in PLUGIN_SUFFIXES and rel.name.casefold() not in active:state=FileType.INACTIVE
+        return {'state':state,'providers':providers,'invalid_path':False}
+
+    def state(name:str):return inspect(name)['state']
+    return state,inspect,{'game_data_valid':game_data_valid,'game_data_path':str(game_data) if game_data else '','overwrite_path':str(overwrite)}
+
+
+def _fomod_file_type(instance:Path,profile:Path,cfg:dict[str,Any]):
+    return _fomod_file_environment(instance,profile,cfg)[0]
 
 
 def _evaluate_fomod(archive:Path,seven_zip:str|None,fomod:dict[str,Any],selections:dict[str,list[str]],cfg:dict[str,Any],instance:Path,profile:Path,auto_select:bool=False)->dict[str,Any]:
@@ -341,13 +353,23 @@ def _evaluate_fomod(archive:Path,seven_zip:str|None,fomod:dict[str,Any],selectio
     if unknown_groups or unknown_options:raise WorkflowError('FOMOD selections contain unknown stable IDs',1,{'unknown_groups':unknown_groups,'unknown_options':unknown_options})
     version=_game_version(cfg)
     if fomod.get('game_dependencies') and not version:raise WorkflowError('FOMOD requires the Skyrim game version, but SkyrimSE.exe could not be versioned',1,{'requirements':fomod['game_dependencies']})
-    file_state=_fomod_file_type(instance,profile,cfg)
+    file_state,file_inspect,file_environment=_fomod_file_environment(instance,profile,cfg)
+    dependency_details={name:file_inspect(name) for name in fomod.get('file_dependencies',[])}
+    invalid_dependencies=sorted(name for name,detail in dependency_details.items() if detail['invalid_path'])
+    if invalid_dependencies:raise WorkflowError('FOMOD file dependencies contain unsafe paths',3,{'dependencies':invalid_dependencies})
+    unresolved=sorted(name for name,detail in dependency_details.items() if not file_environment['game_data_valid'] and detail['state'].value=='Missing')
+    if unresolved:raise WorkflowError('FOMOD file dependencies cannot be resolved without a valid Skyrim Data directory',1,{'dependencies':unresolved,'game_data_path':file_environment['game_data_path']})
     try:
         with tempfile.TemporaryDirectory(prefix='mo2-fomod-eval-') as td:
             extracted=Path(td)/'archive'; extracted.mkdir(); _extract(archive,extracted,seven_zip)
             module=extracted/Path(fomod['source'])
             info=next((p for p in module.parent.iterdir() if p.name.casefold()=='info.xml'),None)
-            root=pyfomod.parse((str(info) if info else None,str(module)))
+            parse_warnings=[]
+            root=pyfomod.parse((str(info) if info else None,str(module)),warnings=parse_warnings)
+            validation_warnings=parse_warnings+root.validate()
+            warning_data=[{'type':type(item).__name__,'title':item.title,'message':item.msg,'critical':bool(item.critical)} for item in validation_warnings]
+            critical=[item for item in warning_data if item['critical']]
+            if critical:raise WorkflowError('FOMOD validation reported critical problems; installation was stopped safely',1,{'validation_warnings':warning_data})
             effective=module.parent.parent
             option_ids={id(option):f'{pi}:{gi}:{oi}' for pi,page in enumerate(root.pages) for gi,group in enumerate(page) for oi,option in enumerate(group)}
             installer=pyfomod.Installer(root,path=effective,game_version=version,file_type=file_state)
@@ -376,8 +398,11 @@ def _evaluate_fomod(archive:Path,seven_zip:str|None,fomod:dict[str,Any],selectio
             plugins=_scan_plugins(staged)
             return {'selected_files':selected_files,'plugins':plugins,'visible_pages':visible,'selected_option_ids':selected,'flags':installer.flags(),'game_version':version,
                     'recommended_selections':{group['id']:[option['id'] for option in group['options'] if option['id'] in selected] for page in visible for group in page['groups'] if group.get('id')},
+                    'validation_warnings':warning_data,
                     'environment':{'skyrim_game_path':str(cfg.get('skyrim_game_path','')),'configured_game_version':str(cfg.get('game_version') or ''),
-                                   'file_states':{name:file_state(name).value for name in fomod.get('file_dependencies',[])}}}
+                                   'game_data_valid':file_environment['game_data_valid'],'overwrite_path':file_environment['overwrite_path'],
+                                   'file_states':{name:detail['state'].value for name,detail in dependency_details.items()},
+                                   'file_providers':{name:detail['providers'] for name,detail in dependency_details.items()}}}
     except pyfomod.FailedCondition as exc:raise WorkflowError(f'FOMOD dependency check failed: {exc}',1) from exc
     except pyfomod.InvalidSelection as exc:raise WorkflowError(f'Invalid FOMOD selection: {exc}',1) from exc
     except (OSError,ValueError,ET.ParseError) as exc:raise WorkflowError(f'FOMOD evaluation failed: {exc}',2) from exc
@@ -543,16 +568,33 @@ def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None
           'profile_binding':{n:sha256(profile/n) for n in ('modlist.txt','plugins.txt','loadorder.txt')}}
     atomic_json(plans_dir/f'{plan_id}.json',data); return data
 
+def _safe_relative_path(raw:Any,label:str)->Path:
+    value=str(raw or '').replace('\\','/')
+    posix=PurePosixPath(value); windows=PureWindowsPath(value)
+    parts=tuple(part for part in posix.parts if part not in ('','.'))
+    unsafe=(not value and label=='FOMOD source') or posix.is_absolute() or windows.is_absolute() or bool(windows.drive)
+    unsafe=unsafe or value.startswith('//') or any(part.rstrip(' .') in ('','..') or part.rstrip(' .')!=part or ':' in part or '\x00' in part for part in parts)
+    if unsafe:raise WorkflowError(f'{label} path is unsafe: {raw}',3,{'path':str(raw)})
+    return Path(*parts)
+
+
+def _bounded_fomod_path(base:Path,raw:Any,label:str)->Path:
+    base=base.resolve(); candidate=(base/_safe_relative_path(raw,label)).resolve()
+    if candidate!=base and base not in candidate.parents:raise WorkflowError(f'{label} escaped its allowed root: {raw}',3,{'path':str(raw),'root':str(base)})
+    return candidate
+
+
 def _copy_selected(source:Path,dest:Path,items:list[dict[str,Any]])->None:
+    source=source.resolve(); dest=dest.resolve()
     for item in sorted(items,key=lambda x:x.get('priority',0)):
-        src=source/Path(item['source'].replace('\\','/'))
+        src=_bounded_fomod_path(source,item.get('source',''),'FOMOD source')
         raw_destination=str(item.get('destination','')).replace('\\','/')
-        target=dest/Path(raw_destination)
+        target=_bounded_fomod_path(dest,raw_destination,'FOMOD destination')
         if not src.exists(): raise WorkflowError(f"FOMOD source is missing: {item['source']}",2)
         if src.is_dir():
             target.mkdir(parents=True,exist_ok=True); shutil.copytree(src,target,dirs_exist_ok=True)
         else:
-            if not raw_destination or raw_destination.endswith('/') or item.get('kind')=='folder':target=target/src.name
+            if not raw_destination or raw_destination.endswith('/') or item.get('kind')=='folder':target=_bounded_fomod_path(dest,str(_safe_relative_path(raw_destination,'FOMOD destination')/src.name),'FOMOD destination')
             target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(src,target)
 
 def _write_enabled(path:Path,names:list[str])->None:
@@ -815,8 +857,10 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
         if current_game_version!=resolution.get('game_version'):
             raise WorkflowError('FOMOD game version environment changed after planning; please create a new plan',3,{'planned':resolution.get('game_version'),'current':current_game_version})
     if environment.get('file_states'):
-        state=_fomod_file_type(instance,profile,{'skyrim_game_path':environment.get('skyrim_game_path','')})
+        state,_,current_environment=_fomod_file_environment(instance,profile,{'skyrim_game_path':environment.get('skyrim_game_path','')})
         dependency_drift={name:{'planned':planned,'current':state(name).value} for name,planned in environment['file_states'].items() if state(name).value!=planned}
+        if current_environment['game_data_valid']!=bool(environment.get('game_data_valid')):
+            dependency_drift['<game_data_valid>']={'planned':bool(environment.get('game_data_valid')),'current':current_environment['game_data_valid']}
         if dependency_drift:raise WorkflowError('FOMOD dependency environment changed after planning; please create a new plan',3,{'drift':dependency_drift})
     operation=plan.get('operation','install')
     if operation=='update':

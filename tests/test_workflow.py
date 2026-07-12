@@ -8,6 +8,7 @@ from unittest.mock import patch
 from mo2_agent_toolkit import cli
 from mo2_agent_toolkit.workflow import (
     WorkflowError,
+    _copy_selected,
     _list_7z,
     _place_mods,
     apply_plan,
@@ -288,7 +289,7 @@ Attributes = A
             (profile/'loadorder.txt').write_text(f'{HEADER}\nDependency.esp\n',encoding='utf-8-sig')
             archive=root/'Conditional.zip'
             xml='''<config><moduleName>Conditional</moduleName><installSteps order="Explicit">
-              <installStep name="Hidden"><visible><flagDependency flag="never" value="yes"/></visible><optionalFileGroups><group name="Hidden" type="SelectAny"><plugins><plugin name="Never"><typeDescriptor><type name="Optional"/></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep>
+              <installStep name="Hidden"><visible><fileDependency file="Absent.esp" state="Active"/></visible><optionalFileGroups><group name="Hidden" type="SelectAny"><plugins><plugin name="Never"><typeDescriptor><type name="Optional"/></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep>
               <installStep name="Choice"><optionalFileGroups order="Explicit"><group name="Core" type="SelectExactlyOne"><plugins order="Explicit">
                 <plugin name="Core Files"><files><folder source="Core" destination=""/></files><conditionFlags><flag name="choice">yes</flag></conditionFlags>
                   <typeDescriptor><dependencyType><defaultType name="NotUsable"/><patterns><pattern><dependencies operator="And"><fileDependency file="Dependency.esp" state="Active"/></dependencies><type name="Recommended"/></pattern></patterns></dependencyType></typeDescriptor>
@@ -301,7 +302,8 @@ Attributes = A
             with zipfile.ZipFile(archive,'w') as z:
                 z.writestr('fomod/ModuleConfig.xml',xml); z.writestr('Core/Projected.esp','plugin')
                 z.writestr('Patch/visible.txt','visible'); z.writestr('Conditional/result.txt','conditional')
-            config={'mo2_instance_path':str(instance),'profile':'Default'}
+            game=root/'Game'; (game/'Data').mkdir(parents=True)
+            config={'mo2_instance_path':str(instance),'profile':'Default','skyrim_game_path':str(game)}
             preview=fomod_preview(archive,config)
             self.assertEqual([page['name'] for page in preview['visible_pages']],['Choice','Visible Patch'])
             self.assertEqual(preview['visible_pages'][0]['groups'][0]['options'][0]['type'],'Recommended')
@@ -323,6 +325,56 @@ Attributes = A
             target=instance/'mods'/plan['mod_name']
             self.assertTrue((target/'Projected.esp').is_file()); self.assertTrue((target/'visible.txt').is_file()); self.assertTrue((target/'result.txt').is_file()); self.assertTrue((target/'result-copy.txt').is_file())
             self.assertEqual(result['plugins_enabled'],['Projected.esp'])
+
+
+    def test_fomod_copy_rejects_source_and_destination_path_escape(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); source=root/'source'; destination=root/'destination'; source.mkdir(); destination.mkdir()
+            (source/'safe.txt').write_text('safe',encoding='utf-8')
+            cases=[
+                ({'source':'../secret.txt','destination':'safe.txt','priority':0},'source'),
+                ({'source':'safe.txt','destination':'../escaped.txt','priority':0},'destination'),
+                ({'source':'C:/Windows/win.ini','destination':'safe.txt','priority':0},'source'),
+                ({'source':'safe.txt','destination':'C:/escaped.txt','priority':0},'destination'),
+                ({'source':'safe.txt','destination':'//server/share/escaped.txt','priority':0},'destination'),
+            ]
+            for item,label in cases:
+                with self.subTest(label=label,item=item), self.assertRaises(WorkflowError) as caught:
+                    _copy_selected(source,destination,[item])
+                self.assertEqual(caught.exception.code,3)
+            self.assertEqual(list(destination.iterdir()),[])
+
+    def test_pyfomod_critical_parser_warning_is_a_safe_stop(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/'InvalidEnum.zip'
+            xml="""<config><installSteps><installStep name="Choice"><optionalFileGroups><group name="Core" type="SelectExactlyOn"><plugins><plugin name="Core"><files><file source="Core.esp" destination="Core.esp"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep></installSteps></config>"""
+            with zipfile.ZipFile(archive,'w') as z:z.writestr('fomod/ModuleConfig.xml',xml); z.writestr('Core.esp','plugin')
+            with self.assertRaises(WorkflowError) as caught:fomod_preview(archive,{'mo2_instance_path':str(instance),'profile':'Default'})
+            self.assertEqual(caught.exception.code,1)
+            warnings=caught.exception.details['validation_warnings']
+            self.assertTrue(any(item['type']=='InvalidEnumWarning' and item['critical'] for item in warnings))
+
+    def test_fomod_missing_dependency_requires_valid_game_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/'GameDependency.zip'
+            xml="""<config><moduleDependencies><fileDependency file="Skyrim.esm" state="Active"/></moduleDependencies><requiredInstallFiles><file source="Core.esp" destination="Core.esp"/></requiredInstallFiles></config>"""
+            with zipfile.ZipFile(archive,'w') as z:z.writestr('fomod/ModuleConfig.xml',xml); z.writestr('Core.esp','plugin')
+            with self.assertRaises(WorkflowError) as caught:create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},root/'plans')
+            self.assertEqual(caught.exception.code,1)
+            self.assertIn('valid Skyrim Data',str(caught.exception))
+            self.assertEqual(caught.exception.details['dependencies'],['Skyrim.esm'])
+
+    def test_fomod_dependency_can_be_resolved_from_overwrite_without_game_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; archive=root/'OverwriteDependency.zip'
+            overwrite=instance/'overwrite'; overwrite.mkdir(exist_ok=True); (overwrite/'Generated.esp').write_text('generated',encoding='utf-8')
+            (profile/'plugins.txt').write_text(f'{HEADER}\n*Generated.esp\n',encoding='utf-8-sig')
+            (profile/'loadorder.txt').write_text(f'{HEADER}\nGenerated.esp\n',encoding='utf-8-sig')
+            xml="""<config><moduleDependencies><fileDependency file="Generated.esp" state="Active"/></moduleDependencies><requiredInstallFiles><file source="Core.esp" destination="Core.esp"/></requiredInstallFiles></config>"""
+            with zipfile.ZipFile(archive,'w') as z:z.writestr('fomod/ModuleConfig.xml',xml); z.writestr('Core.esp','plugin')
+            plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},root/'plans')
+            self.assertEqual(plan['fomod_resolution']['environment']['file_states'],{'Generated.esp':'Active'})
+            self.assertEqual(plan['fomod_resolution']['environment']['file_providers'],{'Generated.esp':['overwrite']})
 
 
 

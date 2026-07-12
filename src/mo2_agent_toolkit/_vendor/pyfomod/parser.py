@@ -290,9 +290,9 @@ def write(root, path):
         info = path / "info.xml"
         conf = path / "moduleconfig.xml"
     if info is not None:
-        with info.open("w") as info_f:
+        with info.open("w", encoding="utf-8") as info_f:
             info_f.write(root._info.to_string())
             info_f.write("\n")
-    with conf.open("w") as conf_f:
+    with conf.open("w", encoding="utf-8") as conf_f:
         conf_f.write(root.to_string())
         conf_f.write("\n")
