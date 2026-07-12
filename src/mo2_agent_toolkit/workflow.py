@@ -258,7 +258,7 @@ def fomod_options(archive:Path,seven_zip:str|None=None)->dict[str,Any]|None:
     root,source=_read_fomod_root(archive,seven_zip)
     if root is None:return None
     groups=[]; unsupported=[]
-    supported={'config','moduleName','moduleImage','moduleDependencies','requiredInstallFiles','installSteps','installStep','optionalFileGroups','group','plugins','plugin','description','image','files','file','folder','conditionFlags','flag','typeDescriptor','type','dependencyType','patterns','pattern','dependencies','fileDependency','flagDependency','gameDependency','conditionalFileInstalls','patterns'}
+    supported={'config','moduleName','moduleImage','moduleDependencies','requiredInstallFiles','installSteps','installStep','optionalFileGroups','group','plugins','plugin','description','image','files','file','folder','conditionFlags','flag','typeDescriptor','type','dependencyType','patterns','pattern','dependencies','fileDependency','flagDependency','gameDependency','conditionalFileInstalls','patterns','visible','defaultType'}
     for node in root.iter():
         tag=node.tag.rsplit('}',1)[-1]
         if tag not in supported:unsupported.append(tag)
@@ -291,18 +291,107 @@ def fomod_options(archive:Path,seven_zip:str|None=None)->dict[str,Any]|None:
             for node in pattern.findall(f'./files/{tag}'):files.append({'kind':tag,'source':node.get('source',''),'destination':node.get('destination',''),'priority':int(node.get('priority','0'))})
         conditional.append({'dependencies':_dependency(pattern.find('./dependencies')),'files':files})
 
-    if conditional: unsupported.append('conditionalFileInstalls')
-    if any(g.get('step_dependency') for g in groups): unsupported.append('step visibility dependencies')
-    if any(o.get('patterns') for g in groups for o in g['options']): unsupported.append('dependencyType patterns')
-    return {'source':source,'groups':groups,'required_files':required,'conditional_files':conditional,'unsupported':sorted(set(unsupported))}
+    # pyfomod evaluates conditional files, page visibility and dependency-based
+    # option types during planning. Unknown extensions (including the obsolete
+    # fommDependency) remain a safe hard stop.
+    file_dependencies=sorted({node.get('file','') for node in root.findall('.//fileDependency') if node.get('file')},key=str.casefold)
+    game_dependencies=sorted({node.get('version','') for node in root.findall('.//gameDependency') if node.get('version')})
+    return {'engine':'pyfomod-1.2.1','source':source,'groups':groups,'required_files':required,'conditional_files':conditional,
+            'file_dependencies':file_dependencies,'game_dependencies':game_dependencies,'unsupported':sorted(set(unsupported))}
 
-def _default_selections(fomod:dict[str,Any])->dict[str,list[str]]:
-    result={}
-    for g in fomod['groups']:
-        recommended=[o['id'] for o in g['options'] if o['type'].casefold() in ('required','recommended')]
-        if not recommended and g['type'].casefold() in ('selectexactlyone','selectatleastone') and g['options']: recommended=[g['options'][0]['id']]
-        result[g['id']]=recommended
-    return result
+def _game_version(cfg:dict[str,Any])->str|None:
+    explicit=str(cfg.get('game_version') or '').strip()
+    if explicit:return explicit
+    root=Path(cfg.get('skyrim_game_path','')) if cfg.get('skyrim_game_path') else None
+    exe=root/'SkyrimSE.exe' if root else None
+    if not exe or not exe.is_file() or os.name!='nt':return None
+    escaped=str(exe).replace("'","''")
+    try:
+        result=subprocess.run(['powershell','-NoProfile','-Command',f"(Get-Item -LiteralPath '{escaped}').VersionInfo.ProductVersion"],capture_output=True,text=True,timeout=10)
+        match=re.search(r'\d+(?:\.\d+){1,3}',result.stdout)
+        return match.group(0) if match else None
+    except Exception:return None
+
+
+def _fomod_file_type(instance:Path,profile:Path,cfg:dict[str,Any]):
+    from ._vendor.pyfomod import FileType
+    enabled=[]
+    for line in _read_lines(profile/'modlist.txt'):
+        if line.startswith('+'):
+            path=instance/'mods'/line[1:]
+            if path.is_dir():enabled.append(path)
+    game_data=Path(cfg.get('skyrim_game_path',''))/'Data' if cfg.get('skyrim_game_path') else None
+    active={line[1:].casefold() for line in _read_lines(profile/'plugins.txt') if line.startswith('*')}
+
+    def state(name:str):
+        rel=Path(name.replace('\\','/').lstrip('/'))
+        if rel.is_absolute() or '..' in rel.parts:return FileType.MISSING
+        exists=bool(game_data and (game_data/rel).is_file()) or any((mod/rel).is_file() for mod in enabled)
+        if not exists:return FileType.MISSING
+        if rel.suffix.casefold() in PLUGIN_SUFFIXES and rel.name.casefold() not in active:return FileType.INACTIVE
+        return FileType.ACTIVE
+    return state
+
+
+def _evaluate_fomod(archive:Path,seven_zip:str|None,fomod:dict[str,Any],selections:dict[str,list[str]],cfg:dict[str,Any],instance:Path,profile:Path,auto_select:bool=False)->dict[str,Any]:
+    from ._vendor import pyfomod
+    valid={group['id']:{option['id'] for option in group['options']} for group in fomod['groups']}
+    unknown_groups=sorted(set(selections)-set(valid))
+    unknown_options={group:sorted(set(ids)-valid.get(group,set())) for group,ids in selections.items() if set(ids)-valid.get(group,set())}
+    if unknown_groups or unknown_options:raise WorkflowError('FOMOD selections contain unknown stable IDs',1,{'unknown_groups':unknown_groups,'unknown_options':unknown_options})
+    version=_game_version(cfg)
+    if fomod.get('game_dependencies') and not version:raise WorkflowError('FOMOD requires the Skyrim game version, but SkyrimSE.exe could not be versioned',1,{'requirements':fomod['game_dependencies']})
+    file_state=_fomod_file_type(instance,profile,cfg)
+    try:
+        with tempfile.TemporaryDirectory(prefix='mo2-fomod-eval-') as td:
+            extracted=Path(td)/'archive'; extracted.mkdir(); _extract(archive,extracted,seven_zip)
+            module=extracted/Path(fomod['source'])
+            info=next((p for p in module.parent.iterdir() if p.name.casefold()=='info.xml'),None)
+            root=pyfomod.parse((str(info) if info else None,str(module)))
+            effective=module.parent.parent
+            option_ids={id(option):f'{pi}:{gi}:{oi}' for pi,page in enumerate(root.pages) for gi,group in enumerate(page) for oi,option in enumerate(group)}
+            installer=pyfomod.Installer(root,path=effective,game_version=version,file_type=file_state)
+            visible=[]; selected=[]; page=installer.next()
+            while page is not None:
+                page_selected=[]; page_groups=[]
+                for group in page:
+                    choices=[]; group_options=list(group); group_id=option_ids[id(group_options[0]._object)].rsplit(':',1)[0] if group_options else None
+                    requested=set(selections.get(group_id,[])) if group_id else set()
+                    chosen=[option for option in group_options if option_ids[id(option._object)] in requested]
+                    if auto_select:
+                        chosen=[option for option in group_options if option.type is pyfomod.OptionType.REQUIRED]+[option for option in group_options if option.type is pyfomod.OptionType.RECOMMENDED]
+                        usable=[option for option in group_options if option.type is not pyfomod.OptionType.NOTUSABLE]
+                        if group.type is pyfomod.GroupType.ALL:chosen=usable
+                        elif group.type in (pyfomod.GroupType.EXACTLYONE,pyfomod.GroupType.ATMOSTONE) and len(chosen)>1:chosen=chosen[:1]
+                        elif group.type in (pyfomod.GroupType.EXACTLYONE,pyfomod.GroupType.ATLEASTONE) and not chosen and usable:chosen=usable[:1]
+                    for option in group_options:
+                        oid=option_ids[id(option._object)]
+                        choices.append({'id':oid,'name':option.name,'type':option.type.value})
+                        if option in chosen:page_selected.append(option); selected.append(oid)
+                    page_groups.append({'id':group_id,'name':group.name,'type':group.type.value,'options':choices})
+                visible.append({'name':page.name,'groups':page_groups})
+                page=installer.next(page_selected)
+            selected_files=[{'kind':'file','source':info.source,'destination':info.destination,'priority':info.priority} for info in installer.file_infos()]
+            staged=Path(td)/'staged'; staged.mkdir(); _copy_selected(effective,staged,selected_files)
+            plugins=_scan_plugins(staged)
+            return {'selected_files':selected_files,'plugins':plugins,'visible_pages':visible,'selected_option_ids':selected,'flags':installer.flags(),'game_version':version,
+                    'recommended_selections':{group['id']:[option['id'] for option in group['options'] if option['id'] in selected] for page in visible for group in page['groups'] if group.get('id')},
+                    'environment':{'skyrim_game_path':str(cfg.get('skyrim_game_path','')),'configured_game_version':str(cfg.get('game_version') or ''),
+                                   'file_states':{name:file_state(name).value for name in fomod.get('file_dependencies',[])}}}
+    except pyfomod.FailedCondition as exc:raise WorkflowError(f'FOMOD dependency check failed: {exc}',1) from exc
+    except pyfomod.InvalidSelection as exc:raise WorkflowError(f'Invalid FOMOD selection: {exc}',1) from exc
+    except (OSError,ValueError,ET.ParseError) as exc:raise WorkflowError(f'FOMOD evaluation failed: {exc}',2) from exc
+
+
+
+def fomod_preview(archive:Path,cfg:dict[str,Any],seven_zip:str|None=None,fomod:dict[str,Any]|None=None)->dict[str,Any]|None:
+    fomod=fomod if fomod is not None else fomod_options(archive,seven_zip)
+    if fomod is None:return None
+    if fomod['unsupported']:raise WorkflowError('FOMOD contains unsupported expressions; installation was stopped safely',1,{'unsupported':fomod['unsupported']})
+    instance=Path(cfg.get('mo2_instance_path','')); profile=instance/'profiles'/cfg.get('profile','')
+    if not profile.is_dir():raise WorkflowError('Configured profile does not exist',2)
+    return _evaluate_fomod(archive.expanduser().resolve(),seven_zip,fomod,{},cfg,instance,profile,auto_select=True)
+
 
 def _profile_modlist_context(profile:Path)->dict[str,Any]:
     lines=_read_lines(profile/'modlist.txt')
@@ -412,20 +501,18 @@ def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None
     public_layout={key:value for key,value in layout.items() if not key.startswith('_')}
     if layout['type']=='root':raise WorkflowError('Game-root archive cannot be planned as an ordinary MO2 mod',3,{'layout':public_layout})
     fomod=fomod_options(archive,seven_zip)
-    if fomod and selections is None:
-        raise WorkflowError('FOMOD selections are required before creating an executable plan',1,{'status':'selection_required','layout':public_layout,'fomod':fomod,'recommended_selections':_default_selections(fomod)})
+    selections_missing=bool(fomod and selections is None and any(group.get('options') for group in fomod['groups']))
     selections=selections or {}
     if fomod and fomod['unsupported']: raise WorkflowError('FOMOD contains unsupported expressions; installation was stopped safely',1,{'unsupported':fomod['unsupported']})
-    selected_files=list(fomod['required_files']) if fomod else []
-    if fomod:
-        for group in fomod['groups']:
-            ids=set(selections.get(group['id'],[])); chosen=[option for option in group['options'] if option['id'] in ids]
-            typ=group['type'].casefold()
-            if typ=='selectexactlyone' and len(chosen)!=1: raise WorkflowError(f"FOMOD group requires exactly one choice: {group['name']}",1)
-            if typ=='selectatleastone' and not chosen: raise WorkflowError(f"FOMOD group requires at least one choice: {group['name']}",1)
-            for option in chosen:selected_files.extend(option['files'])
+    selected_files=[]; fomod_resolution=None
     instance=Path(cfg.get('mo2_instance_path','')); profile=instance/'profiles'/cfg.get('profile','')
     if not profile.is_dir():raise WorkflowError('Configured profile does not exist',2)
+    if selections_missing:
+        preview=_evaluate_fomod(archive,seven_zip,fomod,{},cfg,instance,profile,auto_select=True)
+        raise WorkflowError('FOMOD selections are required before creating an executable plan',1,{'status':'selection_required','layout':public_layout,'fomod':fomod,'recommended_selections':preview['recommended_selections'],'recommended_resolution':preview})
+    if fomod:
+        fomod_resolution=_evaluate_fomod(archive,seven_zip,fomod,selections,cfg,instance,profile)
+        selected_files=fomod_resolution['selected_files']
     plan_id=datetime.now().strftime('%Y%m%d-%H%M%S-')+uuid.uuid4().hex[:8]
     mod_name=name or re.sub(r'[-_](?:v?\d[\w.-]*)$','',archive.stem).strip() or archive.stem
     existing=_existing_install_state(instance,profile,mod_name)
@@ -440,10 +527,10 @@ def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None
     profile_transition=None
     if existing['operation']=='update':
         old_plugins=_scan_plugins(instance/'mods'/mod_name)
-        if fomod:
-            candidate=[Path(x.get('destination') or x.get('source','')).name for x in selected_files]
-        else: candidate=[Path(x).name for x in layout.get('_effective_files',[])]
-        new_plugins=sorted({x for x in candidate if Path(x).suffix.casefold() in PLUGIN_SUFFIXES},key=str.casefold)
+        if fomod:new_plugins=list(fomod_resolution['plugins'])
+        else:
+            candidate=[Path(x).name for x in layout.get('_effective_files',[])]
+            new_plugins=sorted({x for x in candidate if Path(x).suffix.casefold() in PLUGIN_SUFFIXES},key=str.casefold)
         pl,lo,changes,states=transform_update_profile(bool(existing['enabled']),_read_lines(profile/'plugins.txt'),_read_lines(profile/'loadorder.txt'),new_plugins,old_plugins)
         profile_transition={'plugins':new_plugins,'old_plugins':old_plugins,'plugin_changes':changes,'plugin_states':states,
           'final_files':{'modlist.txt':_read_lines(profile/'modlist.txt'),'plugins.txt':pl,'loadorder.txt':lo}}
@@ -451,17 +538,22 @@ def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None
           'operation':existing['operation'],'archive':str(archive),'archive_sha256':sha256(archive),'mod_name':mod_name,
           'profile':cfg.get('profile',''),'instance':cfg.get('mo2_instance_path',''),'layout':public_layout,
           'placement':chosen_placement,'existing':existing,'source_metadata':source_metadata,'profile_transition':profile_transition,
-          'modlist_context':modlist_context,'fomod':fomod,'selections':selections,'selected_files':selected_files,
+          'modlist_context':modlist_context,'fomod':fomod,'fomod_resolution':fomod_resolution,'selections':selections,'selected_files':selected_files,
           'archive_after_install':bool(cfg.get('archive_after_install',False)),'archive_directory':cfg.get('archive_directory',''),
           'profile_binding':{n:sha256(profile/n) for n in ('modlist.txt','plugins.txt','loadorder.txt')}}
     atomic_json(plans_dir/f'{plan_id}.json',data); return data
 
 def _copy_selected(source:Path,dest:Path,items:list[dict[str,Any]])->None:
     for item in sorted(items,key=lambda x:x.get('priority',0)):
-        src=source/Path(item['source'].replace('\\','/')); target=dest/Path(item.get('destination','').replace('\\','/'))
+        src=source/Path(item['source'].replace('\\','/'))
+        raw_destination=str(item.get('destination','')).replace('\\','/')
+        target=dest/Path(raw_destination)
         if not src.exists(): raise WorkflowError(f"FOMOD source is missing: {item['source']}",2)
-        if src.is_dir(): shutil.copytree(src,target,dirs_exist_ok=True)
-        else: target.mkdir(parents=True,exist_ok=True) if item.get('kind')=='folder' else target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(src,target/(src.name if target.is_dir() else target.name))
+        if src.is_dir():
+            target.mkdir(parents=True,exist_ok=True); shutil.copytree(src,target,dirs_exist_ok=True)
+        else:
+            if not raw_destination or raw_destination.endswith('/') or item.get('kind')=='folder':target=target/src.name
+            target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(src,target)
 
 def _write_enabled(path:Path,names:list[str])->None:
     raw=path.read_text(encoding='utf-8-sig').splitlines() if path.exists() else []
@@ -716,6 +808,16 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
     binding=plan.get('profile_binding',{})
     drift={n:{'planned':binding.get(n),'current':sha256(profile/n) if (profile/n).is_file() else None} for n in ('modlist.txt','plugins.txt','loadorder.txt') if binding.get(n)!=(sha256(profile/n) if (profile/n).is_file() else None)}
     if drift: raise WorkflowError('Profile changed after planning; please create a new plan',3,{'drift':drift})
+    resolution=plan.get('fomod_resolution') or {}
+    environment=resolution.get('environment') or {}
+    if resolution and 'game_version' in resolution:
+        current_game_version=_game_version({'skyrim_game_path':environment.get('skyrim_game_path',''),'game_version':environment.get('configured_game_version','')})
+        if current_game_version!=resolution.get('game_version'):
+            raise WorkflowError('FOMOD game version environment changed after planning; please create a new plan',3,{'planned':resolution.get('game_version'),'current':current_game_version})
+    if environment.get('file_states'):
+        state=_fomod_file_type(instance,profile,{'skyrim_game_path':environment.get('skyrim_game_path','')})
+        dependency_drift={name:{'planned':planned,'current':state(name).value} for name,planned in environment['file_states'].items() if state(name).value!=planned}
+        if dependency_drift:raise WorkflowError('FOMOD dependency environment changed after planning; please create a new plan',3,{'drift':dependency_drift})
     operation=plan.get('operation','install')
     if operation=='update':
         if placement and any(placement.values()):raise WorkflowError('Explicit placement is not accepted for an in-place update',2)

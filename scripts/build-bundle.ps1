@@ -21,10 +21,14 @@ $Previous = Join-Path $OutputParent ('.bundle-previous-' + [guid]::NewGuid().ToS
 try {
   New-Item -ItemType Directory -Path $Stage | Out-Null
   Get-ChildItem -LiteralPath $SkillSource -Force | Copy-Item -Destination $Stage -Recurse -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'THIRD_PARTY_NOTICES.md') -Destination $Stage -Force
+  $ThirdPartyDestination = Join-Path $Stage 'third_party\pyfomod'
+  New-Item -ItemType Directory -Path $ThirdPartyDestination -Force | Out-Null
+  Get-ChildItem -LiteralPath (Join-Path $Root 'third_party\pyfomod') -Force | Copy-Item -Destination $ThirdPartyDestination -Recurse -Force
   $StageBin = Join-Path $Stage 'bin'
   New-Item -ItemType Directory -Path $StageBin | Out-Null
   Get-ChildItem -LiteralPath $ToolDirectory -Force | Copy-Item -Destination $StageBin -Recurse -Force
-  foreach ($Required in @((Join-Path $Stage 'SKILL.md'), (Join-Path $Stage 'references\agent-contract.md'), (Join-Path $StageBin 'mo2-tool.exe'), (Join-Path $StageBin '_internal'))) {
+  foreach ($Required in @((Join-Path $Stage 'SKILL.md'), (Join-Path $Stage 'references\agent-contract.md'), (Join-Path $Stage 'THIRD_PARTY_NOTICES.md'), (Join-Path $Stage 'third_party\pyfomod\LICENSE'), (Join-Path $StageBin 'mo2-tool.exe'), (Join-Path $StageBin '_internal'))) {
     if (-not (Test-Path -LiteralPath $Required)) { throw "Incomplete bundle; missing: $Required" }
   }
   $Version = & (Join-Path $StageBin 'mo2-tool.exe') --version

@@ -13,6 +13,7 @@ from mo2_agent_toolkit.workflow import (
     apply_plan,
     collect_batch,
     create_plan,
+    fomod_preview,
     prepare_batch,
     archive_source,
 )
@@ -162,6 +163,8 @@ Attributes = A
                 create_plan(archive, {"mo2_instance_path": str(instance), "profile": "Default"}, root / "plans")
             self.assertEqual(caught.exception.code, 1)
             self.assertEqual(caught.exception.details["layout"]["nesting_root"], "Wrapper")
+            self.assertEqual(caught.exception.details["recommended_selections"], {"0:0": []})
+            self.assertEqual(caught.exception.details["recommended_resolution"]["visible_pages"][0]["name"], "Options")
 
     def test_archive_failure_is_post_commit_warning(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -263,6 +266,64 @@ Attributes = A
             result=archive_source(source,destination,"42")
             self.assertEqual(Path(result["path"]).name,"Example-42-2.zip")
             self.assertEqual(Path(result["path"]).read_bytes(),b"new")
+
+
+
+    def test_fomod_without_option_groups_plans_required_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/'RequiredOnly.zip'
+            with zipfile.ZipFile(archive,'w') as z:
+                z.writestr('fomod/ModuleConfig.xml','<config><moduleName>Required Only</moduleName><requiredInstallFiles><file source="Required.esp" destination="Required.esp"/></requiredInstallFiles></config>')
+                z.writestr('Required.esp','plugin')
+            plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},root/'plans')
+            self.assertEqual(plan['fomod_resolution']['visible_pages'],[])
+            self.assertEqual(plan['fomod_resolution']['plugins'],['Required.esp'])
+            self.assertEqual(plan['selected_files'][0]['destination'],'Required.esp')
+
+    def test_pyfomod_evaluates_visibility_types_conditionals_and_folder_plugins(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'
+            provider=instance/'mods'/'Ordinary Existing'; provider.mkdir(); (provider/'Dependency.esp').write_text('dep',encoding='utf-8')
+            (profile/'plugins.txt').write_text(f'{HEADER}\n*Dependency.esp\n',encoding='utf-8-sig')
+            (profile/'loadorder.txt').write_text(f'{HEADER}\nDependency.esp\n',encoding='utf-8-sig')
+            archive=root/'Conditional.zip'
+            xml='''<config><moduleName>Conditional</moduleName><installSteps order="Explicit">
+              <installStep name="Hidden"><visible><flagDependency flag="never" value="yes"/></visible><optionalFileGroups><group name="Hidden" type="SelectAny"><plugins><plugin name="Never"><typeDescriptor><type name="Optional"/></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep>
+              <installStep name="Choice"><optionalFileGroups order="Explicit"><group name="Core" type="SelectExactlyOne"><plugins order="Explicit">
+                <plugin name="Core Files"><files><folder source="Core" destination=""/></files><conditionFlags><flag name="choice">yes</flag></conditionFlags>
+                  <typeDescriptor><dependencyType><defaultType name="NotUsable"/><patterns><pattern><dependencies operator="And"><fileDependency file="Dependency.esp" state="Active"/></dependencies><type name="Recommended"/></pattern></patterns></dependencyType></typeDescriptor>
+                </plugin></plugins></group></optionalFileGroups></installStep>
+              <installStep name="Visible Patch"><visible><flagDependency flag="choice" value="yes"/></visible><optionalFileGroups order="Explicit"><group name="Patch" type="SelectExactlyOne"><plugins order="Explicit">
+                <plugin name="Patch"><files><file source="Patch/visible.txt" destination="visible.txt"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+              </plugins></group></optionalFileGroups></installStep></installSteps>
+              <conditionalFileInstalls><patterns><pattern><dependencies operator="And"><flagDependency flag="choice" value="yes"/></dependencies><files><file source="Conditional/result.txt" destination="result.txt" priority="1"/><file source="Conditional/result.txt" destination="result-copy.txt" priority="2"/></files></pattern></patterns></conditionalFileInstalls>
+            </config>'''
+            with zipfile.ZipFile(archive,'w') as z:
+                z.writestr('fomod/ModuleConfig.xml',xml); z.writestr('Core/Projected.esp','plugin')
+                z.writestr('Patch/visible.txt','visible'); z.writestr('Conditional/result.txt','conditional')
+            config={'mo2_instance_path':str(instance),'profile':'Default'}
+            preview=fomod_preview(archive,config)
+            self.assertEqual([page['name'] for page in preview['visible_pages']],['Choice','Visible Patch'])
+            self.assertEqual(preview['visible_pages'][0]['groups'][0]['options'][0]['type'],'Recommended')
+            self.assertEqual(preview['recommended_selections'],{'1:0':['1:0:0'],'2:0':['2:0:0']})
+            selections={'1:0':['1:0:0'],'2:0':['2:0:0']}
+            plan=create_plan(archive,config,root/'plans',selections=selections)
+            resolution=plan['fomod_resolution']
+            self.assertEqual(plan['fomod']['engine'],'pyfomod-1.2.1')
+            self.assertEqual([p['name'] for p in resolution['visible_pages']],['Choice','Visible Patch'])
+            self.assertEqual(resolution['visible_pages'][0]['groups'][0]['options'][0]['type'],'Recommended')
+            self.assertEqual(resolution['flags'],{'choice':'yes'})
+            self.assertEqual(resolution['plugins'],['Projected.esp'])
+            destinations={item['destination'].replace('\\','/') for item in plan['selected_files']}
+            self.assertEqual(destinations,{'Projected.esp','visible.txt','result.txt','result-copy.txt'})
+            priorities={item['destination'].replace('\\','/'):item['priority'] for item in plan['selected_files']}
+            self.assertEqual((priorities['result.txt'],priorities['result-copy.txt']),(1,2))
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]):
+                result=apply_plan(root/'plans'/f"{plan['id']}.json",None,self.placement())
+            target=instance/'mods'/plan['mod_name']
+            self.assertTrue((target/'Projected.esp').is_file()); self.assertTrue((target/'visible.txt').is_file()); self.assertTrue((target/'result.txt').is_file()); self.assertTrue((target/'result-copy.txt').is_file())
+            self.assertEqual(result['plugins_enabled'],['Projected.esp'])
+
 
 
 if __name__ == "__main__":

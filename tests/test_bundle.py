@@ -37,6 +37,14 @@ class BundleContractTests(unittest.TestCase):
         self.assertNotIn("release/mo2-agent-toolkit/bin", workflow)
         self.assertNotIn("Copy-Item dist/mo2-tool/*", workflow)
 
+    def test_bundle_includes_vendored_pyfomod_notices(self):
+        build = (ROOT / "scripts" / "build-bundle.ps1").read_text(encoding="utf-8")
+        notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        self.assertIn("THIRD_PARTY_NOTICES.md", build)
+        self.assertIn("third_party\\pyfomod\\LICENSE", build)
+        self.assertIn("pyfomod 1.2.1", notices)
+        self.assertTrue((ROOT / "third_party" / "pyfomod" / "LICENSE").is_file())
+
     def test_adapter_uses_stable_shared_bundle(self):
         install = (ROOT / "scripts" / "install-adapters.ps1").read_text(encoding="utf-8")
         uninstall = (ROOT / "scripts" / "uninstall-adapters.ps1").read_text(encoding="utf-8")

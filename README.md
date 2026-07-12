@@ -88,6 +88,10 @@ $Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\m
 & $Tool install apply <plan-id> --yes --after-mod "<exact mod or separator>" --json
 ```
 
+### FOMOD engine
+
+FOMOD planning uses the vendored Apache-2.0 `pyfomod 1.2.1` engine to evaluate page visibility, conditional option types, flags, file/game dependencies, conditional file installs, group constraints, ordering, priorities, and folder expansion. Planning projects the resolved files into a staging tree and scans that tree for plugins before a plan can be applied. The dependency environment and selected result are frozen in the plan; Profile or referenced-file drift requires replanning. The obsolete `fommDependency` expression and unknown vendor extensions remain safe hard stops.
+
 `batch prepare` resolves dependency alternatives and opens required official Nexus pages together; optional dependencies are shown for confirmation and are not opened by default. It returns immediately and does not monitor downloads. After the user says downloads are complete, `batch collect` scans once using Nexus filename, size, file ID, and SHA-256 evidence. FOMOD archives require explicit selections; unsupported conditions stop safely and never fall back to installing every file. Apply is hash-bound, blocks while MO2 runs, requires an exact non-ambiguous placement for new installs (and no placement for same-folder updates), validates the flattened staged root, rescans staged plugins, audits committed content by SHA-256, updates and audits the active profile in one transaction, and only archives after commit. Use `archive retry <plan-id>` after a post-commit archive warning.
 
 ## NPC FaceGen conflict workflow

@@ -643,14 +643,15 @@ def main(argv: list[str] | None=None) -> int:
                     data=json.loads(sp.read_text(encoding="utf-8")) if args.batch_command=="status" else collect_batch(sp)
                     payload,code=envelope("success" if data.get("status") in ("collected","awaiting_downloads") else "review",data,[] if data.get("status")!="review" else ["Some downloads are missing or ambiguous"]),0 if data.get("status")!="review" else 1
             else:
-                mapping={"info":("nexus-mod-info.py",["full",str(args.mod_id)]),"deps":("nexus-deps-resolve.py",["check",str(args.mod_id)])}
                 warnings=[]
                 if args.nexus_command=="download":
                     values=list(args.values)
                     if values and values[0]=="download": warnings.append("Deprecated syntax: use nexus download <mod-id> <file-id>"); values=values[1:]
                     if len(values)!=2: raise ToolError("nexus download requires <mod-id> <file-id>",2)
-                    script="nexus-download.py"; call=values
-                else: script,call=mapping[args.nexus_command]
+                    script="nexus-download.py"; call=["download",*values]
+                else:
+                    mapping={"info":("nexus-mod-info.py",["full",str(args.mod_id)]),"deps":("nexus-deps-resolve.py",["check",str(args.mod_id)])}
+                    script,call=mapping[args.nexus_command]
                 if warnings and as_json:
                     captured=io.StringIO()
                     with contextlib.redirect_stdout(captured): code=run_legacy(script,call+["--json"],load_config())
@@ -673,11 +674,12 @@ def main(argv: list[str] | None=None) -> int:
             data["archive_result"]=archive_source(source,destination); data["status"]="complete"; write_manifest(pp,data); payload,code=envelope("success",data),0
         elif args.command=="root": payload,code=handle_root(args)
         elif args.command=="install":
-            from .workflow import create_plan, apply_plan, fomod_options, inspect_archive
+            from .workflow import create_plan, apply_plan, fomod_options, fomod_preview, inspect_archive
             cfg=load_config()
             if args.install_command=="inspect":
-                archive=Path(args.archive); layout=inspect_archive(archive,find_7zip(cfg)); fomod=fomod_options(archive,find_7zip(cfg))
-                data={"archive":str(archive.resolve()),"layout":layout,"fomod":fomod,"status":"selection_required" if fomod else "ready"}
+                archive=Path(args.archive); seven_zip=find_7zip(cfg); layout=inspect_archive(archive,seven_zip); fomod=fomod_options(archive,seven_zip)
+                preview=fomod_preview(archive,cfg,seven_zip,fomod) if fomod else None
+                data={"archive":str(archive.resolve()),"layout":layout,"fomod":fomod,"recommended_resolution":preview,"recommended_selections":preview.get("recommended_selections") if preview else None,"status":"selection_required" if fomod else "ready"}
                 payload,code=envelope("review" if fomod else "success",data,["Confirm FOMOD selections before planning"] if fomod else []),1 if fomod else 0
             elif args.install_command=="plan":
                 selections=None

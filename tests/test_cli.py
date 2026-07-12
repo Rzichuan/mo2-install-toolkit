@@ -170,7 +170,7 @@ class CliTests(unittest.TestCase):
             archive=base/"engine-fixes.zip"; archive.write_bytes(b"archive")
             config=base/"config.toml"
             cli.save_config({"mo2_instance_path":str(instance),"profile":"Default","skyrim_game_path":str(game)},config)
-            with patch.object(cli,"CONFIG_PATH",config), patch.object(cli,"_extract_root_archive",return_value=content), patch.object(cli,"_game_processes_running",return_value=[]):
+            with patch.object(cli,"CONFIG_PATH",config), patch.object(cli,"_extract_root_archive",return_value=content), patch.object(cli,"_game_processes_running",return_value=[]), patch("mo2_agent_toolkit.workflow.mo2_running",return_value=[]):
                 out=io.StringIO()
                 with contextlib.redirect_stdout(out): code=cli.main(["root","deploy",str(archive),"--yes","--json"])
                 payload=json.loads(out.getvalue()); backup_id=payload["data"]["backup_id"]
@@ -223,6 +223,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code,0); self.assertEqual(json.loads(out.getvalue())["data"]["source_metadata"],metadata)
         self.assertEqual(create.call_args.args[-1],metadata)
 
+    def test_install_inspect_json_includes_pyfomod_recommendations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); instance=self.make_instance(root); archive=root/"Recommended.zip"
+            import zipfile
+            xml='''<config><installSteps><installStep name="Options"><optionalFileGroups><group name="Choice" type="SelectExactlyOne"><plugins><plugin name="Recommended"><files><file source="Recommended.esp" destination="Recommended.esp"/></files><typeDescriptor><type name="Recommended"/></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep></installSteps></config>'''
+            with zipfile.ZipFile(archive,"w") as z:
+                z.writestr("fomod/ModuleConfig.xml",xml); z.writestr("Recommended.esp","plugin")
+            config={"mo2_instance_path":str(instance),"profile":"Default"}
+            with patch.object(cli,"load_config",return_value=config), patch.object(cli,"find_7zip",return_value=None):
+                out=io.StringIO()
+                with contextlib.redirect_stdout(out):code=cli.main(["install","inspect",str(archive),"--json"])
+            payload=json.loads(out.getvalue())
+            self.assertEqual(code,1); self.assertEqual(payload["status"],"review")
+            self.assertEqual(payload["data"]["fomod"]["engine"],"pyfomod-1.2.1")
+            self.assertEqual(payload["data"]["recommended_selections"],{"0:0":["0:0:0"]})
+            self.assertEqual(payload["data"]["recommended_resolution"]["plugins"],["Recommended.esp"])
+
     def test_legacy_mutating_install_and_update_are_blocked(self):
         with patch.object(cli,"load_config",return_value={}), patch("mo2_agent_toolkit.workflow.fomod_options",return_value=None):
             install=io.StringIO()
@@ -243,6 +260,28 @@ class CliTests(unittest.TestCase):
         with patch.object(cli.sys,"stdout",stdout), patch.object(cli.sys,"stderr",stderr):cli._configure_stdio()
         self.assertEqual(stdout.options,{"encoding":"utf-8","errors":"replace"})
         self.assertEqual(stderr.options,{"encoding":"utf-8","errors":"replace"})
+
+
+class NexusDownloadCliRegressionTests(unittest.TestCase):
+    def test_standard_download_syntax_does_not_require_mod_id_attribute(self):
+        with patch.object(cli, "run_legacy", return_value=0) as run:
+            code = cli.main(["nexus", "download", "78106", "759668", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(run.call_args.args[0], "nexus-download.py")
+        self.assertEqual(run.call_args.args[1], ["download", "78106", "759668", "--json"])
+
+    def test_deprecated_download_syntax_keeps_json_envelope(self):
+        legacy = {"status": "downloaded", "mod_id": "78106", "file_id": "759668"}
+        def fake_run(_script, _args, _cfg):
+            print(json.dumps(legacy))
+            return 0
+        out = io.StringIO()
+        with patch.object(cli, "run_legacy", side_effect=fake_run), contextlib.redirect_stdout(out):
+            code = cli.main(["nexus", "download", "download", "78106", "759668", "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["status"], "success")
+        self.assertIn("Deprecated syntax", payload["warnings"][0])
 
 
 if __name__ == "__main__": unittest.main()

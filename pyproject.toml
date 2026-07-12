@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mo2-agent-toolkit"
-version = "0.7.0"
+version = "0.7.1"
 description = "Agent-neutral, safety-first Mod Organizer 2 toolkit"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,4 +23,4 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-mo2_agent_toolkit = ["legacy/*.py"]
+mo2_agent_toolkit = ["legacy/*.py", "_vendor/pyfomod/LICENSE"]

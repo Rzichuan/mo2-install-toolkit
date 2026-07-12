@@ -1,3 +1,10 @@
+## 0.7.1 - 2026-07-12
+
+- Replaced the limited in-house FOMOD evaluator with vendored `pyfomod 1.2.1` (Apache-2.0), including page visibility, dependency-based option types, conditional installs, flags, ordering, priorities, and selection validation.
+- Project selected FOMOD folders into a staging tree during planning, fixing plugins hidden inside selected folders such as `Core\Plugin.esp`.
+- Bind referenced FOMOD file states and stop Apply when the dependency environment drifts.
+- Ported pyfomod XML parsing to the standard library to support Python 3.14/PyInstaller without its stale `lxml<5` constraint.
+
 ## 0.7.0
 
 - Added strict enabled/disabled/unregistered plugin state transitions shared by plan and apply.
