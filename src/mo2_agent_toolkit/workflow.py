@@ -19,10 +19,18 @@ DATA_DIRECTORIES={
     'source','tools'
 }
 IGNORED_ARCHIVE_DIRECTORIES={'__macosx'}
+_EXECUTABLE_INSTALLER_NAMES={
+    'install.exe','installer.exe','setup.exe','install.bat','installer.bat','setup.bat',
+    'install.cmd','installer.cmd','setup.cmd','install.ps1','installer.ps1','setup.ps1',
+}
 _METADATA_NAMES={'meta.ini','desktop.ini','thumbs.db','manifest.json','install.json','info.json'}
 _METADATA_PREFIXES=('readme','read me','changelog','change log','license','credits','description','checksum')
 _METADATA_SUFFIXES={'.txt','.md','.rtf','.pdf','.jpg','.jpeg','.png','.gif','.webp','.bmp','.crc','.sfv','.sha1','.sha256','.sha512'}
 ROOT_GAME_FILES={'d3d11.dll','d3dcompiler_46e.dll','d3dcompiler_47.dll','dxgi.dll','enbseries.ini','enblocal.ini','skse64_loader.exe','skse64_steam_loader.dll'}
+SELECTIONS_EXAMPLE={'0:0':['0:0:0']}
+SELECTIONS_UNSET=object()
+_FOMOD_ADVISORY_WARNING_TYPES={'CommentsPresentWarning'}
+_LEADING_CATEGORY_TAGS=re.compile(r'^(?:\[[^\]\r\n]+\]\s*)+(.+)$')
 
 class WorkflowError(Exception):
     def __init__(self,message:str,code:int=2,details:Any=None): super().__init__(message); self.code=code; self.details=details
@@ -100,6 +108,32 @@ def _valid_effective_path(path:str)->bool:
     return (Path(parts[-1]).suffix.casefold() in GAME_FILE_SUFFIXES
             or parts[0].casefold() in DATA_DIRECTORIES)
 
+def _installer_risk(file_paths:list[str],archive_name:str|None)->dict[str,Any]|None:
+    lowered=[path.replace('\\','/').strip('/').casefold() for path in file_paths]
+    csharp=sorted((path for path in file_paths if Path(path).suffix.casefold()=='.cs' and 'fomod' in [part.casefold() for part in PurePosixPath(path.replace('\\','/')).parts]),key=str.casefold)
+    if csharp:
+        return {'type':'fomod_csharp','risk':'arbitrary_code_execution','evidence':csharp[:20],
+                'message':'C# FOMOD installers execute archive-supplied code and require MO2 GUI or manual review'}
+    ncc=sorted((path for path in file_paths if path.replace('\\','/').casefold().endswith('ncc/nexusclientcli.exe') or Path(path).name.casefold()=='nexusclientcli.exe'),key=str.casefold)
+    if ncc:
+        return {'type':'ncc','risk':'external_process_execution','evidence':ncc[:20],
+                'message':'Legacy Nexus Client CLI installers are not supported by the headless installer'}
+    archive_suffix=Path(archive_name or '').suffix.casefold()
+    omod=archive_suffix=='.omod' or any(path=='config' for path in lowered)
+    if omod:
+        evidence=[archive_name] if archive_suffix=='.omod' else [path for path in file_paths if path.casefold()=='config']
+        return {'type':'omod','risk':'dynamic_installer','evidence':evidence[:20],
+                'message':'OMOD packages may execute installer scripts and require MO2 GUI or manual review'}
+    executable=[]
+    for path in file_paths:
+        parts=PurePosixPath(path.replace('\\','/')).parts
+        if len(parts)<=2 and parts and parts[-1].casefold() in _EXECUTABLE_INSTALLER_NAMES:
+            executable.append(path)
+    if executable:
+        return {'type':'executable_installer','risk':'process_execution_required','evidence':sorted(executable,key=str.casefold)[:20],
+                'message':'The archive contains an explicit installer entry point; automatic execution is not allowed'}
+    return None
+
 def _manual_steps(paths:list[str])->list[dict[str,Any]]:
     normalized=[p.replace('\\','/').casefold().strip('/') for p in paths]
     features={
@@ -125,7 +159,7 @@ def _manual_steps(paths:list[str])->list[dict[str,Any]]:
         result.append({'tool':'Behavior generator','level':'review','advisory':True,'reason':'Archive contains prebuilt behavior files but no recognized generator patch','steps':[]})
     return result
 
-def detect_layout(entries:list[dict[str,Any]])->dict[str,Any]:
+def detect_layout(entries:list[dict[str,Any]],archive_name:str|None=None)->dict[str,Any]:
     """Return the canonical archive/directory layout used by inspect, plan, and apply."""
     normalized=[_member_values(entry) for entry in entries]
     normalized=[item for item in normalized if item[0]]
@@ -143,8 +177,12 @@ def detect_layout(entries:list[dict[str,Any]])->dict[str,Any]:
     suspected=sorted(candidates,key=str.casefold)
     root_blockers=[name for name in root_files if not _is_metadata_file(name)]
     root_data_dirs=[name for name in top_dirs if name.casefold() in DATA_DIRECTORIES]
+    data_directories=sorted((name for name in top_dirs if name.casefold()=='data'),key=str.casefold)
+    nested_data_directories=sorted({path.rsplit('/',1)[0] for path in file_paths if '/data/' in '/'+path.casefold()},key=str.casefold)
     nesting_root=qualified[0] if len(candidates)==1 and len(qualified)==1 and not root_blockers and not root_data_dirs else None
     flatten=nesting_root is not None
+    data_folder=bool(flatten and nesting_root and nesting_root.casefold()=='data')
+    ambiguous_data_folder=bool(data_directories and not data_folder)
     effective_files=child_paths(nesting_root) if nesting_root else list(file_paths)
     if flatten:
         effective_files.extend(name for name in root_files if _is_metadata_file(name))
@@ -154,6 +192,19 @@ def detect_layout(entries:list[dict[str,Any]])->dict[str,Any]:
     has_root_files=any(Path(path).name.casefold() in ROOT_GAME_FILES or re.match(r'^skse64_1_[0-9_]+\.dll$',Path(path).name.casefold()) or path.startswith(('enbcache/','enbseries/')) for path in lowered)
     plugin_count=sum(Path(path).suffix.casefold() in PLUGIN_SUFFIXES for path in effective_files)
     has_data=any(_valid_effective_path(path) for path in effective_files)
+    risk=_installer_risk(file_paths,archive_name)
+    if risk:
+        handler='unsupported'; support_status='risky'; support_reason=risk['type']
+    elif (ambiguous_data_folder or nested_data_directories) and not has_fomod and not data_folder:
+        handler='unsupported'; support_status='unsupported'; support_reason='ambiguous_data_folder' if ambiguous_data_folder else 'nested_data_folder'
+    elif has_fomod:
+        handler='fomod'; support_status='supported'; support_reason=None
+    elif has_root_files:
+        handler='unsupported'; support_status='unsupported'; support_reason='game_root_archive'
+    elif has_data:
+        handler='data-folder' if data_folder else 'simple'; support_status='supported'; support_reason=None
+    else:
+        handler='unsupported'; support_status='unsupported'; support_reason='no_recognized_mod_data'
     steps=_manual_steps(effective_files)
     features={
         'has_bodyslide_project':any(x['tool']=='BodySlide' and x['level']=='recommended' for x in steps),
@@ -165,7 +216,9 @@ def detect_layout(entries:list[dict[str,Any]])->dict[str,Any]:
     }
     return {
         'type':'fomod' if has_fomod else 'root' if has_root_files else 'mo2' if has_data else 'asset',
-        'nesting_root':nesting_root,'flatten':flatten,'has_nesting':flatten,
+        'handler':handler,'support_status':support_status,'support_reason':support_reason,'installer_risk':risk,
+        'nesting_root':nesting_root,'flatten':flatten,'has_nesting':flatten,'data_folder':data_folder,
+        'nested_data_directories':nested_data_directories,
         'effective_root_entries':effective_entries,'suspected_wrapper_directories':suspected,
         'root_entries':sorted({path.split('/',1)[0] for path,_ in normalized},key=str.casefold),
         'has_fomod':has_fomod,'has_root_files':has_root_files,'has_data_files':has_data,
@@ -178,7 +231,7 @@ def detect_layout(entries:list[dict[str,Any]])->dict[str,Any]:
 def inspect_archive(archive:Path,seven_zip:str|None=None)->dict[str,Any]:
     archive=archive.expanduser().resolve()
     if not archive.is_file():raise WorkflowError('Archive does not exist',2)
-    layout=detect_layout(archive_members(archive,seven_zip))
+    layout=detect_layout(archive_members(archive,seven_zip),archive.name)
     return {key:value for key,value in layout.items() if not key.startswith('_')}
 
 def _directory_members(root:Path)->list[dict[str,Any]]:
@@ -241,7 +294,45 @@ def _read_fomod_root(archive:Path,seven_zip:str|None)->tuple[ET.Element|None,str
     with tempfile.TemporaryDirectory(prefix='mo2-fomod-') as td:
         root=Path(td); _extract(archive,root,seven_zip); source=root/Path(match)
         try:return ET.fromstring(source.read_bytes()),match
-        except ET.ParseError as exc:raise WorkflowError(f'Invalid FOMOD XML: {exc}',2)
+        except ET.ParseError as exc:
+            warning={'type':'InvalidSyntaxWarning','title':'XML Syntax Error','message':str(exc),
+                     'upstream_critical':True,'critical':True,'blocking':True,'advisory':False}
+            raise WorkflowError(f'Invalid FOMOD XML: {exc}',2,{'validation_warnings':[warning]}) from exc
+
+def _canonical_fomod_source(source:str)->str:
+    parts=source.replace('\\','/').split('/')
+    if len(parts)>=2:return '/'.join([*parts[:-2],'fomod','ModuleConfig.xml'])
+    return 'fomod/ModuleConfig.xml'
+
+def _classify_fomod_warning(item:Any)->dict[str,Any]:
+    warning_type=type(item).__name__
+    upstream_critical=bool(item.critical)
+    advisory=warning_type in _FOMOD_ADVISORY_WARNING_TYPES or not upstream_critical
+    blocking=upstream_critical and warning_type not in _FOMOD_ADVISORY_WARNING_TYPES
+    return {'type':warning_type,'title':item.title,'message':item.msg,
+            'upstream_critical':upstream_critical,'critical':blocking,'blocking':blocking,'advisory':advisory}
+
+def _json_type(value:Any)->str:
+    if value is None:return 'null'
+    if isinstance(value,bool):return 'boolean'
+    if isinstance(value,str):return 'string'
+    if isinstance(value,list):return 'array'
+    if isinstance(value,dict):return 'object'
+    if isinstance(value,(int,float)):return 'number'
+    return type(value).__name__
+
+def validate_selections(selections:Any)->dict[str,list[str]]:
+    details={'field':'selections','expected':'object mapping group IDs to arrays of option IDs','actual':_json_type(selections),'example':SELECTIONS_EXAMPLE}
+    if not isinstance(selections,dict):raise WorkflowError(f"Expected selections to be an object, got {_json_type(selections)}",2,details)
+    for group,options in selections.items():
+        if not isinstance(group,str):
+            raise WorkflowError(f'Expected every selections group ID to be a string, got {_json_type(group)}',2,{**details,'field':'selections.<group_id>','expected':'string','actual':_json_type(group)})
+        if not isinstance(options,list):
+            raise WorkflowError(f"Expected an array of option IDs for group '{group}', got {_json_type(options)}",2,{**details,'field':f'selections.{group}','expected':'array of strings','actual':_json_type(options)})
+        for index,option in enumerate(options):
+            if not isinstance(option,str):
+                raise WorkflowError(f"Expected a string option ID for group '{group}' at index {index}, got {_json_type(option)}",2,{**details,'field':f'selections.{group}[{index}]','expected':'string','actual':_json_type(option)})
+    return selections
 
 def _dependency(node:ET.Element|None)->dict[str,Any]|None:
     if node is None:return None
@@ -296,7 +387,9 @@ def fomod_options(archive:Path,seven_zip:str|None=None)->dict[str,Any]|None:
     # fommDependency) remain a safe hard stop.
     file_dependencies=sorted({node.get('file','') for node in root.findall('.//fileDependency') if node.get('file')},key=str.casefold)
     game_dependencies=sorted({node.get('version','') for node in root.findall('.//gameDependency') if node.get('version')})
-    return {'engine':'pyfomod-1.2.1','source':source,'groups':groups,'required_files':required,'conditional_files':conditional,
+    canonical_source=_canonical_fomod_source(source)
+    return {'engine':'pyfomod-1.2.1','source':source,'canonical_source':canonical_source,'case_variant':source!=canonical_source,
+            'groups':groups,'required_files':required,'conditional_files':conditional,
             'file_dependencies':file_dependencies,'game_dependencies':game_dependencies,'unsupported':sorted(set(unsupported))}
 
 def _game_version(cfg:dict[str,Any])->str|None:
@@ -347,10 +440,11 @@ def _fomod_file_type(instance:Path,profile:Path,cfg:dict[str,Any]):
 
 def _evaluate_fomod(archive:Path,seven_zip:str|None,fomod:dict[str,Any],selections:dict[str,list[str]],cfg:dict[str,Any],instance:Path,profile:Path,auto_select:bool=False)->dict[str,Any]:
     from ._vendor import pyfomod
+    selections=validate_selections(selections)
     valid={group['id']:{option['id'] for option in group['options']} for group in fomod['groups']}
     unknown_groups=sorted(set(selections)-set(valid))
     unknown_options={group:sorted(set(ids)-valid.get(group,set())) for group,ids in selections.items() if set(ids)-valid.get(group,set())}
-    if unknown_groups or unknown_options:raise WorkflowError('FOMOD selections contain unknown stable IDs',1,{'unknown_groups':unknown_groups,'unknown_options':unknown_options})
+    if unknown_groups or unknown_options:raise WorkflowError('FOMOD selections contain unknown stable IDs',2,{'field':'selections','expected':'known group and option IDs','actual':{'unknown_groups':unknown_groups,'unknown_options':unknown_options},'example':SELECTIONS_EXAMPLE,'unknown_groups':unknown_groups,'unknown_options':unknown_options})
     version=_game_version(cfg)
     if fomod.get('game_dependencies') and not version:raise WorkflowError('FOMOD requires the Skyrim game version, but SkyrimSE.exe could not be versioned',1,{'requirements':fomod['game_dependencies']})
     file_state,file_inspect,file_environment=_fomod_file_environment(instance,profile,cfg)
@@ -367,9 +461,9 @@ def _evaluate_fomod(archive:Path,seven_zip:str|None,fomod:dict[str,Any],selectio
             parse_warnings=[]
             root=pyfomod.parse((str(info) if info else None,str(module)),warnings=parse_warnings)
             validation_warnings=parse_warnings+root.validate()
-            warning_data=[{'type':type(item).__name__,'title':item.title,'message':item.msg,'critical':bool(item.critical)} for item in validation_warnings]
-            critical=[item for item in warning_data if item['critical']]
-            if critical:raise WorkflowError('FOMOD validation reported critical problems; installation was stopped safely',1,{'validation_warnings':warning_data})
+            warning_data=[_classify_fomod_warning(item) for item in validation_warnings]
+            blocking=[item for item in warning_data if item['blocking']]
+            if blocking:raise WorkflowError('FOMOD validation reported blocking problems; installation was stopped safely',1,{'validation_warnings':warning_data})
             effective=module.parent.parent
             option_ids={id(option):f'{pi}:{gi}:{oi}' for pi,page in enumerate(root.pages) for gi,group in enumerate(page) for oi,option in enumerate(group)}
             installer=pyfomod.Installer(root,path=effective,game_version=version,file_type=file_state)
@@ -443,6 +537,66 @@ def _profile_modlist_context(profile:Path)->dict[str,Any]:
             'after_mod':'Insert immediately after the anchor in modlist.txt (lower MO2 priority / higher in the left pane).',
         },
     }
+
+_RELATED_TOKEN_STOPWORDS={'main','file','files','mod','mods','patch','update','updated','version','final','installer','fomod','skyrim','special','edition','anniversary','se','ae','sse','archive'}
+
+
+def _mod_name_without_tags(name:str)->str:
+    match=_LEADING_CATEGORY_TAGS.match(name.strip())
+    return match.group(1).strip() if match else name.strip()
+
+
+def _relation_tokens(*values:str)->set[str]:
+    tokens=set()
+    for value in values:
+        for token in re.findall(r'[A-Za-z][A-Za-z0-9]{2,}',value or ''):
+            folded=token.casefold()
+            if folded not in _RELATED_TOKEN_STOPWORDS and not re.fullmatch(r'v?\d+(?:\d+)*',folded):tokens.add(folded)
+    return tokens
+
+
+def _add_naming_and_related_context(context:dict[str,Any],mod_name:str,archive:Path,source_metadata:dict[str,Any])->None:
+    categories:dict[str,dict[str,Any]]={}
+    categorized=0; uncategorized=0
+    for entry in context['installed_mods_file_order']:
+        match=re.match(r'^\[([^]\r\n]+)\]\s*(.+)$',entry['name'])
+        if not match:
+            if not entry['name'].casefold().endswith('_separator'):uncategorized+=1
+            continue
+        categorized+=1; prefix=f'[{match.group(1)}]'
+        bucket=categories.setdefault(prefix,{'prefix':prefix,'count':0,'examples':[]})
+        bucket['count']+=1
+        if len(bucket['examples'])<3:bucket['examples'].append(entry['name'])
+    category_prefixes=sorted(categories.values(),key=lambda item:(-item['count'],item['prefix'].casefold()))
+    context['naming_conventions']={
+        'explicit_name_required':True,
+        'requested_name':mod_name,
+        'categorized_mods':categorized,
+        'uncategorized_mods':uncategorized,
+        'category_prefixes':category_prefixes,
+        'observed_pattern':'[category] concise localized role——recognizable original mod title',
+        'guidance':'Follow the active Profile convention; preserve a recognizable original title and do not invent a new taxonomy when an established category fits.',
+    }
+    official=str(source_metadata.get('official_filename') or source_metadata.get('file_name') or '')
+    query=_relation_tokens(_mod_name_without_tags(mod_name),archive.stem,Path(official).stem)
+    related=[]
+    for entry in context['installed_mods_file_order']:
+        if entry['name'].casefold()==mod_name.casefold():continue
+        overlap=sorted(query & _relation_tokens(_mod_name_without_tags(entry['name'])))
+        if overlap:
+            related.append({'name':entry['name'],'reason':'name_token_overlap','matching_tokens':overlap,
+                            'line':entry['file_index']+1,'enabled':entry['enabled'],'score':len(overlap)})
+    related.sort(key=lambda item:(-item['score'],item['line'],item['name'].casefold()))
+    context['related_mods']=related[:20]
+    context['placement_decision_order']=[
+        'Place a patch/addon next to its exact base mod with the intended overwrite direction.',
+        'Keep the same mod family or framework components together.',
+        'Use file-conflict providers to express intentional overwrite priority.',
+        'Otherwise place inside the established semantic category block near the closest functional peers.',
+        'Use a generic separator/top/bottom only when no stronger relationship exists and explain why.',
+    ]
+    context['evidence_limits']=['Related mods are lexical evidence candidates, not automatic placement decisions; the agent must combine them with Nexus purpose/dependencies, selected files, conflicts, and Profile conventions.']
+
 
 def _add_conflict_context(context:dict[str,Any],instance:Path,effective_files:list[str])->None:
     expected={path.replace('\\','/').casefold() for path in effective_files if not _is_metadata_file(path)}
@@ -518,16 +672,24 @@ def _validated_source_metadata(source_metadata:dict[str,Any]|None)->dict[str,Any
     return result
 
 
-def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None,selections:dict[str,list[str]]|None=None,seven_zip:str|None=None,placement:dict[str,Any]|None=None,source_metadata:dict[str,Any]|None=None)->dict[str,Any]:
+def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None,selections:Any=SELECTIONS_UNSET,seven_zip:str|None=None,placement:dict[str,Any]|None=None,source_metadata:dict[str,Any]|None=None)->dict[str,Any]:
     source_metadata=_validated_source_metadata(source_metadata)
+    selections_provided=selections is not SELECTIONS_UNSET
+    selections=validate_selections(selections) if selections_provided else {}
     archive=archive.expanduser().resolve()
     if not archive.is_file(): raise WorkflowError('Archive does not exist',2)
-    layout=detect_layout(archive_members(archive,seven_zip))
+    layout=detect_layout(archive_members(archive,seven_zip),archive.name)
     public_layout={key:value for key,value in layout.items() if not key.startswith('_')}
-    if layout['type']=='root':raise WorkflowError('Game-root archive cannot be planned as an ordinary MO2 mod',3,{'layout':public_layout})
+    if layout['support_status']=='risky':
+        raise WorkflowError('Archive requires an executable or scripted installer; automatic installation is blocked',3,{'layout':public_layout,'risk':layout.get('installer_risk')})
+    if layout['support_status']!='supported':
+        if layout['type']=='root':raise WorkflowError('Game-root archive cannot be planned as an ordinary MO2 mod',3,{'layout':public_layout})
+        if layout.get('support_reason') in {'ambiguous_data_folder','nested_data_folder'}:
+            raise WorkflowError('Data folder layout is ambiguous; automatic installation was stopped',3,{'layout':public_layout,'reason':layout.get('support_reason')})
+        # Keep legacy direct planning of unknown asset layouts compatible. Inspect marks
+        # them unsupported, and staged validation still prevents an invalid commit.
     fomod=fomod_options(archive,seven_zip)
-    selections_missing=bool(fomod and selections is None and any(group.get('options') for group in fomod['groups']))
-    selections=selections or {}
+    selections_missing=bool(fomod and not selections_provided and any(group.get('options') for group in fomod['groups']))
     if fomod and fomod['unsupported']: raise WorkflowError('FOMOD contains unsupported expressions; installation was stopped safely',1,{'unsupported':fomod['unsupported']})
     selected_files=[]; fomod_resolution=None
     instance=Path(cfg.get('mo2_instance_path','')); profile=instance/'profiles'/cfg.get('profile','')
@@ -548,7 +710,8 @@ def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None
                           'previous_mod':existing['previous_mod'],'next_mod':existing['next_mod']}
     else:
         chosen_placement=_empty_placement(); chosen_placement.update(placement or {})
-    modlist_context=_profile_modlist_context(profile); _add_conflict_context(modlist_context,instance,layout.get('_effective_files',[]))
+        if any((placement or {}).values()):_place_mods(_read_lines(profile/'modlist.txt'),[mod_name],chosen_placement)
+    modlist_context=_profile_modlist_context(profile); _add_naming_and_related_context(modlist_context,mod_name,archive,source_metadata); _add_conflict_context(modlist_context,instance,layout.get('_effective_files',[]))
     profile_transition=None
     if existing['operation']=='update':
         old_plugins=_scan_plugins(instance/'mods'/mod_name)
@@ -562,6 +725,7 @@ def create_plan(archive:Path,cfg:dict[str,Any],plans_dir:Path,name:str|None=None
     data={'schema_version':2,'id':plan_id,'created_at':datetime.now(timezone.utc).isoformat(),'status':'planned',
           'operation':existing['operation'],'archive':str(archive),'archive_sha256':sha256(archive),'mod_name':mod_name,
           'profile':cfg.get('profile',''),'instance':cfg.get('mo2_instance_path',''),'layout':public_layout,
+          'handler':layout['handler'],'support_status':layout['support_status'],
           'placement':chosen_placement,'existing':existing,'source_metadata':source_metadata,'profile_transition':profile_transition,
           'modlist_context':modlist_context,'fomod':fomod,'fomod_resolution':fomod_resolution,'selections':selections,'selected_files':selected_files,
           'archive_after_install':bool(cfg.get('archive_after_install',False)),'archive_directory':cfg.get('archive_directory',''),
@@ -621,11 +785,29 @@ def _unique_entries(lines:list[str],prefixes:str)->list[str]:
 def _entry_name(line:str)->str:
     return line.lstrip('+-*')
 
-def _find_unique_anchor(lines:list[str],name:str)->int:
+def _anchor_candidates(lines:list[str],name:str,matches:list[int],line_offset:int=0)->list[dict[str,Any]]:
+    if matches:
+        return [{'name':_entry_name(lines[index]),'reason':'exact_duplicate','line':index+1+line_offset} for index in matches[:10]]
+    wanted=name.casefold(); tagged=[]; suffix=[]
+    for index,line in enumerate(lines):
+        if not line or line.startswith('#'):continue
+        actual=_entry_name(line); tag_match=_LEADING_CATEGORY_TAGS.match(actual)
+        if tag_match and tag_match.group(1).casefold()==wanted:
+            tagged.append({'name':actual,'reason':'tag_stripped_exact','line':index+1+line_offset})
+            continue
+        folded=actual.casefold()
+        if folded.endswith(wanted) and len(actual)>len(name):
+            boundary=actual[-len(name)-1]
+            if boundary.isspace() or boundary in ']})_-–—:':
+                suffix.append({'name':actual,'reason':'bounded_suffix','line':index+1+line_offset})
+    return (tagged or suffix)[:10]
+
+def _find_unique_anchor(lines:list[str],name:str,line_offset:int=0)->int:
     matches=[index for index,line in enumerate(lines) if line and not line.startswith('#') and _entry_name(line).casefold()==name.casefold()]
     if len(matches)!=1:
         reason='missing' if not matches else 'duplicated'
-        raise WorkflowError(f'Mod placement anchor is {reason}: {name}',2,{'anchor':name,'matches':matches})
+        candidates=_anchor_candidates(lines,name,matches,line_offset)
+        raise WorkflowError(f'Mod placement anchor is {reason}: {name}',2,{'anchor':name,'matches':[index+1+line_offset for index in matches],'candidates':candidates})
     return matches[0]
 
 def _place_mods(lines:list[str],mod_names:list[str],placement:dict[str,Any])->tuple[list[str],dict[str,Any]]:
@@ -634,9 +816,9 @@ def _place_mods(lines:list[str],mod_names:list[str],placement:dict[str,Any])->tu
     lines=[line for line in lines if line!=header and _entry_name(line).casefold() not in {name.casefold() for name in mod_names}]
     unmanaged_at=next((i for i,line in enumerate(lines) if line.startswith('*DLC:') or line.startswith('*Creation Club:')),len(lines))
     if placement.get('before_mod'):
-        insertion=_find_unique_anchor(lines,str(placement['before_mod']))
+        insertion=_find_unique_anchor(lines,str(placement['before_mod']),1)
     elif placement.get('after_mod'):
-        insertion=_find_unique_anchor(lines,str(placement['after_mod']))+1
+        insertion=_find_unique_anchor(lines,str(placement['after_mod']),1)+1
     elif placement.get('modlist_top'):
         insertion=0
     else:
@@ -813,20 +995,43 @@ def _compare_manifests(expected:dict[str,str],actual:dict[str,str])->dict[str,An
     return {'status':'passed' if not (missing or extra or different) else 'failed','expected_files':len(expected),
             'installed_files':len(actual),'missing':missing,'extra':extra,'different':different}
 
+def _archive_sidecar(path:Path)->Path:
+    return Path(str(path)+'.meta')
+
 def archive_source(source:Path,destination:Path,file_id:str|None=None)->dict[str,Any]:
     source=source.expanduser().resolve(); destination=destination.expanduser().resolve(); target=(destination/source.name).resolve()
+    source_meta=_archive_sidecar(source); target_meta=_archive_sidecar(target)
     if source==target or (target.exists() and source.exists() and os.path.samefile(source,target)):
-        return {'status':'already_in_archive','path':str(source)}
+        meta={'status':'already_in_archive','path':str(source_meta)} if source_meta.is_file() else {'status':'not_found'}
+        return {'status':'already_in_archive','path':str(source),'meta':meta}
     destination.mkdir(parents=True,exist_ok=True)
-    if target.exists():
-        if sha256(target)==sha256(source):
-            source.unlink(); return {'status':'deduplicated','path':str(target)}
+    if target.exists() and sha256(target)==sha256(source) and not source_meta.exists():
+        source.unlink()
+        meta={'status':'existing_destination','path':str(target_meta)} if target_meta.is_file() else {'status':'not_found'}
+        return {'status':'deduplicated','path':str(target),'meta':meta}
+    if target.exists() or target_meta.exists():
         base_suffix=f'-{file_id}' if file_id else datetime.now().strftime('-%Y%m%d-%H%M%S')
         candidate=destination/f'{source.stem}{base_suffix}{source.suffix}'; counter=2
-        while candidate.exists():
+        while candidate.exists() or _archive_sidecar(candidate).exists():
             candidate=destination/f'{source.stem}{base_suffix}-{counter}{source.suffix}'; counter+=1
-        target=candidate
-    shutil.move(str(source),target); return {'status':'moved','path':str(target)}
+        target=candidate; target_meta=_archive_sidecar(target)
+    archive_moved=False; sidecar_moved=False
+    try:
+        shutil.move(str(source),target); archive_moved=True
+        if source_meta.is_file():shutil.move(str(source_meta),target_meta); sidecar_moved=True
+    except Exception as exc:
+        rollback_errors=[]
+        if sidecar_moved or (target_meta.exists() and not source_meta.exists()):
+            try:shutil.move(str(target_meta),source_meta)
+            except Exception as rollback_exc:rollback_errors.append({'item':'meta','error':str(rollback_exc)})
+        if archive_moved and target.exists() and not source.exists():
+            try:shutil.move(str(target),source)
+            except Exception as rollback_exc:rollback_errors.append({'item':'archive','error':str(rollback_exc)})
+        if rollback_errors:
+            raise WorkflowError('Archive sidecar move failed and pair rollback was incomplete',5,{'error':str(exc),'rollback_errors':rollback_errors,'source':str(source),'target':str(target)}) from exc
+        raise
+    meta={'status':'moved','path':str(target_meta)} if target_meta.is_file() else {'status':'not_found'}
+    return {'status':'moved','path':str(target),'meta':meta}
 
 def _validate_update_state(plan:dict[str,Any],instance:Path,profile:Path)->dict[str,Any]:
     current=_existing_install_state(instance,profile,plan['mod_name']); planned=plan.get('existing') or {}
@@ -836,7 +1041,103 @@ def _validate_update_state(plan:dict[str,Any],instance:Path,profile:Path)->dict[
     return current
 
 
-def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=None)->dict[str,Any]:
+def _conflict_signature(plan:dict[str,Any])->list[dict[str,Any]]:
+    providers=[]
+    for item in (plan.get('modlist_context') or {}).get('conflict_file_providers',[]):
+        providers.append({'mod':item.get('mod'),'enabled':item.get('enabled'),
+                          'matching_files':sorted(item.get('matching_files',[]),key=str.casefold),
+                          'truncated':bool(item.get('truncated'))})
+    return sorted(providers,key=lambda item:str(item.get('mod','')).casefold())
+
+
+def _placement_signature(plan:dict[str,Any],override:dict[str,Any]|None=None)->dict[str,Any]:
+    placement=dict(plan.get('placement') or {})
+    if override:placement.update(override)
+    if plan.get('operation')=='update':
+        return {key:placement.get(key) for key in ('mode','enabled','previous_mod','next_mod')}
+    return {key:placement.get(key) for key in ('mode','before_mod','after_mod','modlist_top','modlist_bottom')}
+
+
+def _semantic_signature(plan:dict[str,Any],placement:dict[str,Any]|None=None)->dict[str,Any]:
+    resolution=plan.get('fomod_resolution') or None
+    if resolution:
+        resolution={key:resolution.get(key) for key in ('selected_files','plugins','visible_pages','selected_option_ids','flags','game_version','environment','validation_warnings')}
+    signature={
+        'operation':plan.get('operation'),'mod_name':plan.get('mod_name'),'instance':plan.get('instance'),'profile':plan.get('profile'),
+        'archive_sha256':plan.get('archive_sha256'),'layout':plan.get('layout'),'source_metadata':plan.get('source_metadata') or {},
+        'selections':plan.get('selections') or {},'fomod':plan.get('fomod'),'fomod_resolution':resolution,
+        'selected_files':plan.get('selected_files') or [],'placement':_placement_signature(plan,placement),
+        'conflict_file_providers':_conflict_signature(plan),
+    }
+    if plan.get('operation')=='update':
+        existing=plan.get('existing') or {}
+        transition=plan.get('profile_transition') or {}
+        signature['existing']={key:existing.get(key) for key in ('operation','target_exists','enabled','marker','previous_mod','next_mod')}
+        signature['profile_transition']={key:transition.get(key) for key in ('plugins','old_plugins','plugin_changes','plugin_states')}
+    return signature
+
+
+def _json_path(path:str,key:Any)->str:
+    if isinstance(key,int):return f'{path}[{key}]'
+    key=str(key)
+    return f'{path}.{key}' if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',key) else f'{path}[{json.dumps(key,ensure_ascii=False)}]'
+
+
+def _semantic_differences(old:Any,new:Any,path:str='$')->list[dict[str,Any]]:
+    changes=[]
+    if isinstance(old,dict) and isinstance(new,dict):
+        for key in sorted(set(old)|set(new),key=str):
+            if key not in old:changes.append({'path':_json_path(path,key),'old':'<missing>','new':new[key]})
+            elif key not in new:changes.append({'path':_json_path(path,key),'old':old[key],'new':'<missing>'})
+            else:changes.extend(_semantic_differences(old[key],new[key],_json_path(path,key)))
+    elif isinstance(old,list) and isinstance(new,list):
+        for index in range(max(len(old),len(new))):
+            if index>=len(old):changes.append({'path':_json_path(path,index),'old':'<missing>','new':new[index]})
+            elif index>=len(new):changes.append({'path':_json_path(path,index),'old':old[index],'new':'<missing>'})
+            else:changes.extend(_semantic_differences(old[index],new[index],_json_path(path,index)))
+    elif old!=new:changes.append({'path':path,'old':old,'new':new})
+    return changes
+
+
+def _auto_replan(plan_path:Path,plan:dict[str,Any],seven_zip:str|None,placement:dict[str,Any]|None,drift:dict[str,Any])->dict[str,Any]:
+    instance=Path(plan['instance']); profile=instance/'profiles'/plan['profile']
+    current_state=_existing_install_state(instance,profile,plan['mod_name'])
+    effective_placement=dict(plan.get('placement') or {})
+    if placement:effective_placement.update(placement)
+    requested_placement=effective_placement if current_state['operation']=='install' and any(effective_placement.get(key) for key in ('before_mod','after_mod','modlist_top','modlist_bottom')) else None
+    environment=(plan.get('fomod_resolution') or {}).get('environment') or {}
+    cfg={'mo2_instance_path':plan['instance'],'profile':plan['profile'],
+         'skyrim_game_path':environment.get('skyrim_game_path',''),'game_version':environment.get('configured_game_version',''),
+         'archive_after_install':bool(plan.get('archive_after_install')),'archive_directory':plan.get('archive_directory','')}
+    replacement=create_plan(Path(plan['archive']),cfg,plan_path.parent,plan['mod_name'],plan.get('selections') or {},seven_zip,None,plan.get('source_metadata') or {})
+    placement_review=None
+    if replacement.get('operation')=='install' and requested_placement:
+        try:
+            normalized=_normalize_placement(requested_placement)
+            _place_mods(_read_lines(profile/'modlist.txt'),[plan['mod_name']],normalized)
+            replacement['placement']=normalized
+        except WorkflowError as exc:
+            placement_review={'message':str(exc),'details':exc.details}
+            replacement['placement_review']=placement_review
+    replacement_path=plan_path.parent/f"{replacement['id']}.json"
+    old_signature=_semantic_signature(plan,effective_placement)
+    new_signature=_semantic_signature(replacement)
+    changes=_semantic_differences(old_signature,new_signature)
+    equivalent=not changes
+    replacement['supersedes']=plan['id']; replacement['replan_profile_drift']=drift
+    atomic_json(replacement_path,replacement)
+    plan['status']='superseded'; plan['superseded_by']=replacement['id']; plan['superseded_at']=datetime.now(timezone.utc).isoformat()
+    atomic_json(plan_path,plan)
+    replan={'attempted':True,'equivalent':equivalent,'original_plan_id':plan['id'],'effective_plan_id':replacement['id'],'semantic_changes':changes}
+    if not equivalent:
+        raise WorkflowError('Profile changes produced a semantically different replacement plan; review and confirm the new plan',1,
+                            {'status':'replan_review_required','new_plan_id':replacement['id'],'profile_drift':drift,'placement_review':placement_review,'replan':replan,'semantic_changes':changes})
+    result=apply_plan(replacement_path,seven_zip,None,auto_replan=False)
+    result['replan']=replan; atomic_json(replacement_path,result)
+    return result
+
+
+def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=None,auto_replan:bool=False)->dict[str,Any]:
     plan=json.loads(plan_path.read_text(encoding='utf-8-sig'))
     if plan.get('schema_version') != 2: raise WorkflowError('Plan schema is obsolete; please create a new plan',2,{'planned_schema':plan.get('schema_version'),'required_schema':2})
     running=mo2_running()
@@ -847,9 +1148,13 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
     if not archive.exists() or sha256(archive)!=plan['archive_sha256']: raise WorkflowError('Archive changed or is missing; create a new plan',2)
     instance=Path(plan['instance']); profile=instance/'profiles'/plan['profile']; target=instance/'mods'/plan['mod_name']
     if not profile.is_dir():raise WorkflowError('Configured profile does not exist',2)
+    if plan.get('operation')=='update' and placement and any(placement.values()):
+        raise WorkflowError('Explicit placement is not accepted for an in-place update',2)
     binding=plan.get('profile_binding',{})
     drift={n:{'planned':binding.get(n),'current':sha256(profile/n) if (profile/n).is_file() else None} for n in ('modlist.txt','plugins.txt','loadorder.txt') if binding.get(n)!=(sha256(profile/n) if (profile/n).is_file() else None)}
-    if drift: raise WorkflowError('Profile changed after planning; please create a new plan',3,{'drift':drift})
+    if drift:
+        if auto_replan:return _auto_replan(plan_path,plan,seven_zip,placement,drift)
+        raise WorkflowError('Profile changed after planning; please create a new plan',3,{'drift':drift})
     resolution=plan.get('fomod_resolution') or {}
     environment=resolution.get('environment') or {}
     if resolution and 'game_version' in resolution:
@@ -871,8 +1176,11 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
         if placement:selected_placement.update(placement)
         selected_placement=_normalize_placement(selected_placement)
         _place_mods(_read_lines(profile/'modlist.txt'),[plan['mod_name']],selected_placement)
-    current_layout=detect_layout(archive_members(archive,seven_zip)); planned_layout=plan.get('layout') or {}
-    for key in ('nesting_root','flatten','type'):
+    current_layout=detect_layout(archive_members(archive,seven_zip),archive.name); planned_layout=plan.get('layout') or {}
+    if planned_layout.get('support_status')=='risky' or current_layout.get('support_status')=='risky':
+        raise WorkflowError('Archive is now recognized as requiring an executable or scripted installer; automatic installation is blocked',3,
+                            {'planned_layout':planned_layout,'current_layout':{key:value for key,value in current_layout.items() if not key.startswith('_')}})
+    for key in ('handler','support_status','support_reason','installer_risk','nesting_root','flatten','type'):
         if planned_layout.get(key)!=current_layout.get(key):
             raise WorkflowError('Archive layout no longer matches the installation plan',2,{'field':key,'planned':planned_layout.get(key),'current':current_layout.get(key)})
     tx=instance/'_agent_toolkit_backups'/plan['id']; tx.mkdir(parents=True,exist_ok=False)
@@ -918,6 +1226,7 @@ def apply_plan(plan_path:Path,seven_zip:str|None,placement:dict[str,Any]|None=No
         plan['profile_audit']=audit
         if audit['status']!='passed':raise WorkflowError('Profile audit failed; installation was rolled back',5,audit)
         plan.update(status='complete',plugins=list(plugins),plugins_enabled=sorted((name for name in plugins if plugin_states.get(name.casefold())=='enabled'),key=str.casefold),
+                    replan={'attempted':False,'equivalent':None,'original_plan_id':plan['id'],'effective_plan_id':plan['id'],'semantic_changes':[]},
                     target=str(target),staged_validation=validation,metadata=metadata_result,metadata_audit=metadata_audit,
                     plugin_changes=plugin_changes,content_audit=content_audit,final_placement=placement_result,
                     manual_advisory='以下操作为建议操作；如你已有自己的处理方案，无需完全参照或执行。')

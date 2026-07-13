@@ -37,13 +37,23 @@ class BundleContractTests(unittest.TestCase):
         self.assertNotIn("release/mo2-agent-toolkit/bin", workflow)
         self.assertNotIn("Copy-Item dist/mo2-tool/*", workflow)
 
-    def test_bundle_includes_vendored_pyfomod_notices(self):
+    def test_bundle_includes_project_and_vendored_licenses(self):
         build = (ROOT / "scripts" / "build-bundle.ps1").read_text(encoding="utf-8")
         notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        project_license = (ROOT / "LICENSE").read_text(encoding="utf-8")
+        self.assertIn("(Join-Path $Root 'LICENSE')", build)
+        self.assertIn("(Join-Path $Stage 'LICENSE')", build)
         self.assertIn("THIRD_PARTY_NOTICES.md", build)
         self.assertIn("third_party\\pyfomod\\LICENSE", build)
+        self.assertIn("GNU GENERAL PUBLIC LICENSE", project_license)
         self.assertIn("pyfomod 1.2.1", notices)
         self.assertTrue((ROOT / "third_party" / "pyfomod" / "LICENSE").is_file())
+
+    def test_project_uses_gpl_3_or_later_metadata(self):
+        project = tomllib.loads((ROOT / "pyproject.toml").read_bytes().decode("utf-8"))["project"]
+        plugin = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual("GPL-3.0-or-later", project["license"])
+        self.assertEqual("GPL-3.0-or-later", plugin["license"])
 
     def test_adapter_uses_stable_shared_bundle(self):
         install = (ROOT / "scripts" / "install-adapters.ps1").read_text(encoding="utf-8")

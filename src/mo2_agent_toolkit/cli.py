@@ -515,12 +515,12 @@ def parser() -> argparse.ArgumentParser:
     rd=rr.add_parser("deploy"); rd.add_argument("archive"); rd.add_argument("--dry-run",action="store_true"); rd.add_argument("--yes",action="store_true"); rd.add_argument("--json",action="store_true")
     ins=sub.add_parser("install"); ii=ins.add_subparsers(dest="install_command",required=True)
     ix=ii.add_parser("inspect"); ix.add_argument("archive"); ix.add_argument("--json",action="store_true")
-    ip=ii.add_parser("plan"); ip.add_argument("archive"); ip.add_argument("--name"); ip.add_argument("--selections"); ip.add_argument("--modid",type=int); ip.add_argument("--file-id",type=int); ip.add_argument("--full-context",action="store_true"); ip.add_argument("--json",action="store_true")
+    ip=ii.add_parser("plan"); ip.add_argument("archive"); ip.add_argument("--name"); ip.add_argument("--selections"); ip.add_argument("--placement-reason"); ip.add_argument("--modid",type=int); ip.add_argument("--file-id",type=int); ip.add_argument("--full-context",action="store_true"); ip.add_argument("--json",action="store_true")
     placement_group=ip.add_mutually_exclusive_group()
     placement_group.add_argument("--before-mod"); placement_group.add_argument("--after-mod")
     placement_group.add_argument("--modlist-top",action="store_true"); placement_group.add_argument("--modlist-bottom",action="store_true")
     for action in ("apply","resume"):
-        ia=ii.add_parser(action); ia.add_argument("plan_id"); ia.add_argument("--yes",action="store_true"); ia.add_argument("--json",action="store_true")
+        ia=ii.add_parser(action); ia.add_argument("plan_id"); ia.add_argument("--yes",action="store_true"); ia.add_argument("--auto-replan",action="store_true"); ia.add_argument("--placement-reason"); ia.add_argument("--json",action="store_true")
         placement_group=ia.add_mutually_exclusive_group()
         placement_group.add_argument("--before-mod"); placement_group.add_argument("--after-mod")
         placement_group.add_argument("--modlist-top",action="store_true"); placement_group.add_argument("--modlist-bottom",action="store_true")
@@ -671,27 +671,40 @@ def main(argv: list[str] | None=None) -> int:
             if not pp.is_file():raise ToolError("Installation plan was not found",2)
             data=json.loads(pp.read_text(encoding="utf-8")); source=Path(data["archive"]); destination=Path(data.get("archive_directory", ""))
             if not source.is_file() or not destination:raise ToolError("Plan has no retryable source archive or destination",2)
-            data["archive_result"]=archive_source(source,destination); data["status"]="complete"; write_manifest(pp,data); payload,code=envelope("success",data),0
+            data["archive_result"]=archive_source(source,destination,str((data.get("source_metadata") or {}).get("file_id") or "")); data["status"]="complete"; write_manifest(pp,data); payload,code=envelope("success",data),0
         elif args.command=="root": payload,code=handle_root(args)
         elif args.command=="install":
-            from .workflow import create_plan, apply_plan, fomod_options, fomod_preview, inspect_archive
+            from .workflow import SELECTIONS_EXAMPLE, SELECTIONS_UNSET, create_plan, apply_plan, fomod_options, fomod_preview, inspect_archive
             cfg=load_config()
             if args.install_command=="inspect":
-                archive=Path(args.archive); seven_zip=find_7zip(cfg); layout=inspect_archive(archive,seven_zip); fomod=fomod_options(archive,seven_zip)
+                archive=Path(args.archive); seven_zip=find_7zip(cfg); layout=inspect_archive(archive,seven_zip)
+                supported=layout.get("support_status")=="supported"
+                fomod=fomod_options(archive,seven_zip) if supported and layout.get("handler")=="fomod" else None
                 preview=fomod_preview(archive,cfg,seven_zip,fomod) if fomod else None
-                data={"archive":str(archive.resolve()),"layout":layout,"fomod":fomod,"recommended_resolution":preview,"recommended_selections":preview.get("recommended_selections") if preview else None,"status":"selection_required" if fomod else "ready"}
-                payload,code=envelope("review" if fomod else "success",data,["Confirm FOMOD selections before planning"] if fomod else []),1 if fomod else 0
+                status="selection_required" if fomod else "ready" if supported else "manual_review_required" if layout.get("support_status")=="risky" else "unsupported"
+                data={"archive":str(archive.resolve()),"handler":layout.get("handler"),"support_status":layout.get("support_status"),"layout":layout,"fomod":fomod,"recommended_resolution":preview,"recommended_selections":preview.get("recommended_selections") if preview else None,"status":status}
+                warnings=["Confirm FOMOD selections before planning"] if fomod else [str((layout.get("installer_risk") or {}).get("message") or "Archive is not supported for automatic installation")] if not supported else []
+                payload,code=envelope("review" if fomod or not supported else "success",data,warnings),1 if fomod or not supported else 0
             elif args.install_command=="plan":
-                selections=None
+                selections=SELECTIONS_UNSET
                 if args.selections:
-                    selections=json.loads(Path(args.selections).read_text(encoding="utf-8-sig"))
+                    try:selections=json.loads(Path(args.selections).read_text(encoding="utf-8-sig"))
+                    except json.JSONDecodeError as exc:
+                        raise ToolError(f'Selections file is not valid JSON: {exc.msg}',2,{'field':'selections','expected':'valid JSON object mapping group IDs to arrays of option IDs','actual':'invalid_json','example':SELECTIONS_EXAMPLE,'line':exc.lineno,'column':exc.colno}) from exc
                 if (args.modid is None)!=(args.file_id is None):raise ToolError("--modid and --file-id must be provided together",2)
+                if not args.name or not args.name.strip():
+                    raise ToolError("An explicit reviewed --name is required; classify the mod using the active Profile's naming conventions",2,
+                                    {"field":"name","expected":"explicit final MO2 mod name based on the mod's purpose and current Profile naming conventions","actual":"missing","example":"[动作动画] 动画前置——Example Mod"})
                 source_metadata=_nexus_file_metadata(args.modid,args.file_id) if args.modid is not None else None
                 placement={"before_mod":args.before_mod,"after_mod":args.after_mod,"modlist_top":args.modlist_top,"modlist_bottom":args.modlist_bottom}
-                data=create_plan(Path(args.archive),cfg,PLANS_DIR,args.name,selections,find_7zip(cfg),placement,source_metadata)
+                if any(placement.values()) and (not args.placement_reason or not args.placement_reason.strip()):
+                    raise ToolError("--placement-reason is required when freezing a new placement",2,
+                                    {"field":"placement_reason","expected":"dependency, patch-family, conflict, or related-mod adjacency rationale","actual":"missing"})
+                if args.placement_reason:placement["reason"]=args.placement_reason.strip()
+                data=create_plan(Path(args.archive),cfg,PLANS_DIR,args.name.strip(),selections,find_7zip(cfg),placement,source_metadata)
                 shown=data if args.full_context else {k:v for k,v in data.items() if k!='modlist_context'}
                 if not args.full_context:
-                    context=data.get('modlist_context',{}); shown['modlist_summary']={'target_adjacency':data.get('placement'),'conflict_file_providers':context.get('conflict_file_providers',[]),'plugin_transition':(data.get('profile_transition') or {}).get('plugin_changes',{}),'manual_steps':data.get('layout',{}).get('manual_post_install_steps',[])}
+                    context=data.get('modlist_context',{}); shown['modlist_summary']={'target_adjacency':data.get('placement'),'naming_conventions':context.get('naming_conventions',{}),'related_mods':context.get('related_mods',[]),'placement_decision_order':context.get('placement_decision_order',[]),'conflict_file_providers':context.get('conflict_file_providers',[]),'plugin_transition':(data.get('profile_transition') or {}).get('plugin_changes',{}),'manual_steps':data.get('layout',{}).get('manual_post_install_steps',[])}
                 payload,code=envelope("success",shown),0
             elif args.install_command in ("apply","resume"):
                 if not args.yes: payload,code=envelope("review",{"plan_id":args.plan_id},["Apply requires --yes after explicit confirmation"]),1
@@ -700,7 +713,11 @@ def main(argv: list[str] | None=None) -> int:
                     if not pp.is_file(): raise ToolError("Installation plan was not found",2)
                     placement={"before_mod":args.before_mod,"after_mod":args.after_mod,"modlist_top":args.modlist_top,"modlist_bottom":args.modlist_bottom}
                     placement={key:value for key,value in placement.items() if value}
-                    data=apply_plan(pp,find_7zip(cfg),placement or None); payload,code=envelope("success" if data.get("status")=="complete" else "warning",data),0 if data.get("status")=="complete" else 1
+                    if placement and (not args.placement_reason or not args.placement_reason.strip()):
+                        raise ToolError("--placement-reason is required when applying a new placement",2,
+                                        {"field":"placement_reason","expected":"dependency, patch-family, conflict, or related-mod adjacency rationale","actual":"missing"})
+                    if placement:placement["reason"]=args.placement_reason.strip()
+                    data=apply_plan(pp,find_7zip(cfg),placement or None,args.auto_replan); payload,code=envelope("success" if data.get("status")=="complete" else "warning",data),0 if data.get("status")=="complete" else 1
             else:
                 archive=Path(args.archive)
                 if archive.is_file() and fomod_options(archive,find_7zip(cfg)) is not None: raise ToolError("Legacy installation is blocked for FOMOD archives; use install inspect/plan/apply",3)
@@ -765,6 +782,8 @@ def main(argv: list[str] | None=None) -> int:
     except AuthError as exc:
         emit(envelope("error",{"category":exc.category},errors=[str(exc)]),as_json); return exc.code
     except (ToolError, WorkflowError) as exc:
+        if exc.code==1 and isinstance(exc.details,dict) and exc.details.get('status')=='replan_review_required':
+            emit(envelope('review',exc.details,warnings=[str(exc)]),as_json); return 1
         emit(envelope("error",exc.details,errors=[str(exc)]),as_json); return exc.code
     except KeyboardInterrupt:
         emit(envelope("error",errors=["Operation cancelled"]),as_json); return 2

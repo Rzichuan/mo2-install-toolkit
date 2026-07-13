@@ -210,6 +210,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code,2)
         self.assertIn("provided together",json.loads(out.getvalue())["errors"][0])
 
+    def test_install_plan_requires_explicit_reviewed_name(self):
+        with patch.object(cli,'load_config',return_value={}):
+            out=io.StringIO()
+            with contextlib.redirect_stdout(out):code=cli.main(['install','plan','Missing.zip','--json'])
+        payload=json.loads(out.getvalue()); self.assertEqual(code,2); self.assertEqual(payload['data']['field'],'name')
+        self.assertIn('explicit reviewed --name',payload['errors'][0])
+
+    def test_install_placement_requires_reason(self):
+        with patch.object(cli,'load_config',return_value={}), patch.object(cli,'find_7zip',return_value=None), patch('mo2_agent_toolkit.workflow.create_plan') as create:
+            out=io.StringIO()
+            with contextlib.redirect_stdout(out):code=cli.main(['install','plan','Missing.zip','--name','[修复优化] 修复补丁——Example','--after-mod','Related Mod','--json'])
+        payload=json.loads(out.getvalue()); self.assertEqual(code,2); self.assertEqual(payload['data']['field'],'placement_reason'); create.assert_not_called()
+
+    def test_install_apply_placement_requires_reason(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan_path=Path(td)/'plan.json'; plan_path.write_text('{}',encoding='utf-8')
+            with patch.object(cli,'load_config',return_value={}), patch('mo2_agent_toolkit.workflow.apply_plan') as apply:
+                out=io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code=cli.main(['install','apply',str(plan_path),'--yes','--after-mod','Related Mod','--json'])
+            payload=json.loads(out.getvalue()); self.assertEqual(code,2); self.assertEqual(payload['data']['field'],'placement_reason'); apply.assert_not_called()
+
     def test_install_plan_freezes_nexus_metadata(self):
         metadata={"provider":"nexus","mod_id":123,"file_id":456,"file_name":"Official.zip",
                   "official_filename":"Official.zip","version":"1.2.3"}
@@ -219,7 +241,7 @@ class CliTests(unittest.TestCase):
              patch("mo2_agent_toolkit.workflow.create_plan",return_value=planned) as create:
             out=io.StringIO()
             with contextlib.redirect_stdout(out):
-                code=cli.main(["install","plan","Example.zip","--modid","123","--file-id","456","--json"])
+                code=cli.main(["install","plan","Example.zip","--name","[修复优化] 修复补丁——Example","--modid","123","--file-id","456","--json"])
         self.assertEqual(code,0); self.assertEqual(json.loads(out.getvalue())["data"]["source_metadata"],metadata)
         self.assertEqual(create.call_args.args[-1],metadata)
 
@@ -240,6 +262,24 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["data"]["recommended_selections"],{"0:0":["0:0:0"]})
             self.assertEqual(payload["data"]["recommended_resolution"]["plugins"],["Recommended.esp"])
 
+    def test_install_inspect_reports_scripted_fomod_without_parsing_it_as_xml_fomod(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); archive=root/"Scripted.zip"
+            import zipfile
+            with zipfile.ZipFile(archive,"w") as zipped:
+                zipped.writestr("fomod/ModuleConfig.xml","<config/>")
+                zipped.writestr("fomod/Script.cs","public class Script {}")
+                zipped.writestr("Example.esp","plugin")
+            with patch.object(cli,"load_config",return_value={}),patch.object(cli,"find_7zip",return_value=None),patch("mo2_agent_toolkit.workflow.fomod_options") as fomod:
+                out=io.StringIO()
+                with contextlib.redirect_stdout(out):code=cli.main(["install","inspect",str(archive),"--json"])
+            payload=json.loads(out.getvalue())
+            self.assertEqual(code,1); self.assertEqual(payload["status"],"review")
+            self.assertEqual(payload["data"]["status"],"manual_review_required")
+            self.assertEqual(payload["data"]["support_status"],"risky")
+            self.assertEqual(payload["data"]["layout"]["installer_risk"]["type"],"fomod_csharp")
+            fomod.assert_not_called()
+
     def test_legacy_mutating_install_and_update_are_blocked(self):
         with patch.object(cli,"load_config",return_value={}), patch("mo2_agent_toolkit.workflow.fomod_options",return_value=None):
             install=io.StringIO()
@@ -250,6 +290,30 @@ class CliTests(unittest.TestCase):
         self.assertIn("install inspect",json.loads(install.getvalue())["errors"][0])
         self.assertIn("install inspect",json.loads(update.getvalue())["errors"][0])
 
+
+
+    def test_install_plan_rejects_invalid_selection_json_and_string_schema(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); malformed=root/'malformed.json'; malformed.write_text('{',encoding='utf-8')
+            string_value=root/'string.json'; string_value.write_text('"0:0:0"',encoding='utf-8')
+            with patch.object(cli,'load_config',return_value={}):
+                out=io.StringIO()
+                with contextlib.redirect_stdout(out):code=cli.main(['install','plan','Missing.zip','--selections',str(malformed),'--json'])
+                payload=json.loads(out.getvalue()); self.assertEqual(code,2); self.assertEqual(payload['data']['actual'],'invalid_json'); self.assertIn('example',payload['data'])
+                out=io.StringIO()
+                with contextlib.redirect_stdout(out):code=cli.main(['install','plan','Missing.zip','--name','[修复优化] 修复补丁——Missing','--selections',str(string_value),'--json'])
+                payload=json.loads(out.getvalue()); self.assertEqual(code,2); self.assertEqual(payload['data']['actual'],'string'); self.assertIn('Expected selections to be an object',payload['errors'][0])
+
+    def test_install_apply_forwards_auto_replan(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); plan_path=root/'plan-1.json'; plan_path.write_text('{}',encoding='utf-8')
+            completed={'id':'plan-2','status':'complete','replan':{'attempted':True}}
+            with patch.object(cli,'load_config',return_value={}), patch.object(cli,'find_7zip',return_value=None), patch('mo2_agent_toolkit.workflow.apply_plan',return_value=completed) as apply:
+                out=io.StringIO()
+                with contextlib.redirect_stdout(out):code=cli.main(['install','apply',str(plan_path),'--yes','--auto-replan','--modlist-bottom','--placement-reason','No related mods; reviewed fallback placement','--json'])
+            self.assertEqual(code,0); self.assertTrue(json.loads(out.getvalue())['data']['replan']['attempted'])
+            self.assertEqual(apply.call_args.args[2]['reason'],'No related mods; reviewed fallback placement')
+            self.assertTrue(apply.call_args.args[3])
 
 
     def test_stdio_is_forced_to_utf8_when_reconfigurable(self):

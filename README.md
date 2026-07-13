@@ -18,15 +18,20 @@ The executable and its PyInstaller `_internal` runtime are part of the Skill Bun
 $Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\mo2-tool.exe"
 & $Tool plan nexus:12345 --json
 & $Tool install inspect C:\Downloads\mod.7z --json
-& $Tool install plan C:\Downloads\mod.7z --modid 12345 --file-id 67890 --json
+& $Tool install plan C:\Downloads\mod.7z --name "[分类] 中文用途——Recognizable Mod Title" --modid 12345 --file-id 67890 --json
 # Choose an exact anchor from modlist_context, show it to the user, and confirm once:
-& $Tool install apply <plan-id> --yes --after-mod "—————— 其他模组生成 ——————_separator" --json
+& $Tool install apply <plan-id> --yes --after-mod "<exact related mod or reviewed fallback>" --placement-reason "<relationship and intended overwrite direction>" --json
 & $Tool profile audit --json
 ```
 
 Nexus may require non-Premium users to download files manually. The toolkit does not bypass Nexus restrictions.
 
-For Nexus archives, always pass `--modid` and `--file-id` together when planning. The plan freezes the official filename/version/last-modified identity; apply creates or merges `meta.ini` in staging and validates it after commit. A new install requires one explicit placement at apply time. A same-folder update is detected automatically, returns `placement.mode=preserve_existing`, preserves the exact Mod position and enabled/disabled marker, and must be applied without placement flags. Existing plugin states are retained, newly introduced plugins default to disabled, and removed plugins are removed from `plugins.txt` and `loadorder.txt`.
+
+Automatic archive handling is deliberately small: ordinary packages use `handler=simple`, a single top-level `Data/` uses `handler=data-folder`, and XML installers use `handler=fomod`. Inspect reports `layout.handler` and `layout.support_status`; a top-level `Data/` is promoted without building a virtual file tree, while root documentation is preserved. C# FOMOD scripts, OMOD, NCC, and explicit setup/install executables are reported as risky or unsupported and are never executed automatically.
+
+Every installation plan requires an explicit reviewed `--name`. Agents must inspect the mod purpose and active Profile conventions, reuse the established category taxonomy and localized-description style, retain a recognizable original title, and present the final name before confirmation. Plan output includes category examples and lexical related-mod candidates. New-install placement also requires `--placement-reason`; agents should keep base/patch, framework, family, and other related mods together, using dependency and conflict overwrite evidence before falling back to a generic separator.
+
+For Nexus archives, always pass `--modid` and `--file-id` together when planning. The plan freezes the official filename/version/last-modified identity; apply creates or merges `meta.ini` in staging and validates it after commit. When the source archive is moved into MO2's archive directory, its adjacent `<archive>.meta` sidecar is moved with it and collision-safe naming preserves both metadata files. A new install requires one explicit placement at apply time. A same-folder update is detected automatically, returns `placement.mode=preserve_existing`, preserves the exact Mod position and enabled/disabled marker, and must be applied without placement flags. Existing plugin states are retained, newly introduced plugins default to disabled, and removed plugins are removed from `plugins.txt` and `loadorder.txt`.
 
 ## Assisted manual Nexus downloads
 
@@ -90,7 +95,9 @@ $Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\m
 
 ### FOMOD engine
 
-FOMOD planning uses the vendored Apache-2.0 `pyfomod 1.2.1` engine to evaluate page visibility, conditional option types, flags, file/game dependencies, conditional file installs, group constraints, ordering, priorities, and folder expansion. Planning projects the resolved files into a staging tree and scans that tree for plugins before a plan can be applied. The dependency environment and selected result are frozen in the plan; Profile or referenced-file drift requires replanning. The obsolete `fommDependency` expression and unknown vendor extensions remain safe hard stops.
+FOMOD planning uses the vendored Apache-2.0 `pyfomod 1.2.1` engine to evaluate page visibility, conditional option types, flags, file/game dependencies, conditional file installs, group constraints, ordering, priorities, and folder expansion. Planning projects the resolved files into a staging tree and scans that tree for plugins before a plan can be applied. The dependency environment and selected result are frozen in the plan. XML comments produce an advisory `CommentsPresentWarning`: their contents are ignored and do not block planning even though PyFomod marks the warning critical upstream. Syntax errors, invalid enums, missing required attributes, invalid option constraints, the obsolete `fommDependency` expression, and unknown vendor extensions remain safe hard stops. Every `validation_warnings` item distinguishes `upstream_critical` from the toolkit's final `critical`, `blocking`, and `advisory` policy.
+
+Selections files are strict JSON objects whose string group IDs map to arrays of string option IDs, for example `{"0:0":["0:0:0"]}`. A string, null, number, object value, non-string array item, or unknown stable group/option ID is an input error (exit 2); no fallback selection is inferred. FOMOD discovery remains case-insensitive, while `root_entries` and `fomod.source` preserve archive spelling. `fomod.canonical_source` reports `fomod/ModuleConfig.xml`, and `case_variant` reports whether the archive spelling differs.
 
 `batch prepare` resolves dependency alternatives and opens required official Nexus pages together; optional dependencies are shown for confirmation and are not opened by default. It returns immediately and does not monitor downloads. After the user says downloads are complete, `batch collect` scans once using Nexus filename, size, file ID, and SHA-256 evidence. FOMOD archives require explicit selections; unsupported conditions stop safely and never fall back to installing every file. Apply is hash-bound, blocks while MO2 runs, requires an exact non-ambiguous placement for new installs (and no placement for same-folder updates), validates the flattened staged root, rescans staged plugins, audits committed content by SHA-256, updates and audits the active profile in one transaction, and only archives after commit. Use `archive retry <plan-id>` after a post-commit archive warning.
 
@@ -117,4 +124,11 @@ mo2-tool profile apply Default --unregister-plugin "Example.esp" --json
 mo2-tool nexus download 12345 67890 --json
 ```
 
-Plugin states are `enabled`, `disabled`, or `unregistered`. Existing mod toggles stay in place unless an explicit placement option is supplied. Installation plans use schema v2 and are invalidated by changes to any profile file.
+Plugin states are `enabled`, `disabled`, or `unregistered`. Existing mod toggles stay in place unless an explicit placement option is supplied. Installation plans remain schema v2 and JSON envelopes remain schema v1. A Profile-file checksum change normally invalidates a plan. `install apply/resume <plan-id> --auto-replan` may create a new plan only for drift in `modlist.txt`, `plugins.txt`, or `loadorder.txt`: it continues under the existing confirmation only when operation, archive/source identity, FOMOD resolution, selections, placement, conflicts, and update state are semantically equivalent. Otherwise it returns exit 1 with `replan_review_required`, a new plan ID, and JSON-path changes for review, without modifying MO2. Archive drift, a running MO2/Skyrim process, and illegal plan state are never bypassed. Apply results include `replan.attempted`, `equivalent`, `original_plan_id`, `effective_plan_id`, and `semantic_changes`.
+
+Placement anchors still require a case-insensitive, complete, unique name. If no exact match exists, the error may include up to ten safe `candidates` with the exact name, reason, and `modlist.txt` line: leading `[category]` tags may be stripped for an exact suggestion, or a name-boundary suffix may be suggested. Candidates are hints only and are never selected automatically; duplicate exact names also remain a hard stop before any transaction or MO2 write.
+
+
+## License
+
+MO2 Agent Toolkit is licensed under GPL-3.0-or-later. Vendored third-party components retain their original licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

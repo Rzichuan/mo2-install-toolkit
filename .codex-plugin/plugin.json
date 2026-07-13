@@ -1,11 +1,11 @@
 {
   "name": "mo2-agent-toolkit",
-  "version": "0.7.2",
+  "version": "0.8.1",
   "description": "Agent-neutral safety-first MO2 installation toolkit",
   "author": {
     "name": "MO2 Agent Toolkit contributors"
   },
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "keywords": [
     "skyrim",
     "mo2",

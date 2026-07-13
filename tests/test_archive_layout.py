@@ -80,5 +80,62 @@ class ArchiveLayoutTests(unittest.TestCase):
         self.assertEqual(layout["manual_post_install_steps"][0]["tool"], "Behavior generator")
 
 
+    def test_top_level_data_folder_is_a_supported_handler(self):
+        layout = detect_layout([
+            file("Data/meshes/example.nif"),
+            file("Data/Example.esp"),
+            file("README.txt"),
+        ], "Example.zip")
+        self.assertEqual(layout["handler"], "data-folder")
+        self.assertEqual(layout["support_status"], "supported")
+        self.assertEqual(layout["nesting_root"], "Data")
+        self.assertEqual(layout["effective_root_entries"], ["Example.esp", "meshes", "README.txt"])
+
+    def test_xml_fomod_with_top_level_data_remains_supported(self):
+        layout = detect_layout([
+            file("fomod/ModuleConfig.xml"),
+            file("Data/Example.esp"),
+        ], "Example.zip")
+        self.assertEqual(layout["handler"], "fomod")
+        self.assertEqual(layout["support_status"], "supported")
+        self.assertFalse(layout["flatten"])
+
+    def test_data_folder_with_unknown_sibling_is_not_guessed(self):
+        layout = detect_layout([
+            file("Data/Example.esp"),
+            file("Extras/Optional.txt"),
+        ], "Example.zip")
+        self.assertEqual(layout["handler"], "unsupported")
+        self.assertEqual(layout["support_status"], "unsupported")
+        self.assertEqual(layout["support_reason"], "ambiguous_data_folder")
+
+    def test_wrapper_around_data_folder_is_not_installed_with_nested_data(self):
+        layout = detect_layout([file("Wrapper/Data/Example.esp")], "Example.zip")
+        self.assertEqual(layout["handler"], "unsupported")
+        self.assertEqual(layout["support_reason"], "nested_data_folder")
+
+    def test_scripted_fomod_is_classified_as_risky(self):
+        layout = detect_layout([
+            file("fomod/ModuleConfig.xml"),
+            file("fomod/Script.cs"),
+            file("Example.esp"),
+        ], "Example.zip")
+        self.assertEqual(layout["handler"], "unsupported")
+        self.assertEqual(layout["support_status"], "risky")
+        self.assertEqual(layout["installer_risk"]["type"], "fomod_csharp")
+
+    def test_explicit_installer_is_blocked_but_mod_tool_executable_is_allowed(self):
+        risky = detect_layout([file("Setup.exe"), file("Data/Example.esp")], "Example.zip")
+        self.assertEqual(risky["support_status"], "risky")
+        tool = detect_layout([file("tools/ExampleTool.exe"), file("Example.esp")], "Example.zip")
+        self.assertEqual(tool["handler"], "simple")
+        self.assertEqual(tool["support_status"], "supported")
+
+    def test_omod_extension_is_classified_as_risky(self):
+        layout = detect_layout([file("textures/example.dds")], "Example.omod")
+        self.assertEqual(layout["support_status"], "risky")
+        self.assertEqual(layout["installer_risk"]["type"], "omod")
+
+
 if __name__ == "__main__":
     unittest.main()

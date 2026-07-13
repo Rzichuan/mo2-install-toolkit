@@ -1,3 +1,27 @@
+## Unreleased
+
+- Add lightweight `simple`, `data-folder`, and `fomod` handler reporting without introducing a virtual file tree.
+- Promote a top-level `Data/` directory while preserving root documentation.
+- Block C# FOMOD, OMOD, NCC, and explicit executable installers from ordinary automatic installation.
+- Move MO2 archive `.meta` sidecars together with archived downloads.
+- Re-license the project under GPL-3.0-or-later while retaining third-party notices.
+
+## 0.8.1 - 2026-07-13
+
+- Require every CLI installation plan to provide an explicit, reviewed `--name` instead of silently deriving a MO2 folder name from the archive.
+- Summarize active-Profile category prefixes, naming examples, lexical related-mod candidates, and a dependency/family/conflict/category placement decision order in plan output.
+- Require `--placement-reason` whenever a new-install placement is supplied, making the agent record why the exact anchor or fallback position was chosen.
+- Strengthen the Skill and agent contract so agents follow the user's established naming taxonomy, preserve a recognizable original title, group related mods, and justify overwrite direction before confirmation.
+
+## 0.8.0 - 2026-07-12
+
+- Classify PyFomod validation warnings through a product policy layer: XML comments are advisory and ignored during resolution, while syntax errors, invalid enums, missing required attributes, and invalid option constraints remain blocking.
+- Strictly validate selections JSON as an object of string group IDs to arrays of string option IDs; malformed JSON, schema violations, and unknown stable IDs are input errors with field diagnostics and examples.
+- Preserve archive spelling in FOMOD `source`, add `canonical_source` and `case_variant`, and continue recognizing the canonical path case-insensitively.
+- Suggest safe tag-stripped or bounded-suffix anchor candidates with exact names and `modlist.txt` line numbers, without ever auto-selecting a non-exact or ambiguous match.
+- Add `install apply/resume --auto-replan` for three-file Profile checksum drift. Semantically equivalent replacement plans continue under the existing confirmation; changed semantics return `replan_review_required` with a new plan ID and JSON-path differences without modifying MO2.
+- Keep plan schema v2 and JSON envelope schema v1 backward compatible while adding structured warning and Apply `replan` fields.
+
 ## 0.7.2 - 2026-07-12
 
 - Reject FOMOD source and destination paths that are absolute, drive-relative, UNC, traversal, ADS-like, or escape staging boundaries.

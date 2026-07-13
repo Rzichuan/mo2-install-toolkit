@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -14,6 +15,7 @@ from mo2_agent_toolkit.workflow import (
     apply_plan,
     collect_batch,
     create_plan,
+    fomod_options,
     fomod_preview,
     prepare_batch,
     archive_source,
@@ -80,6 +82,20 @@ Attributes = A
             self.assertTrue(plan["placement"]["required"])
             self.assertIn(SEPARATOR, [item["name"] for item in plan["modlist_context"]["separators"]])
             self.assertEqual(plan["modlist_context"]["conflict_file_providers"][0]["mod"], "Ordinary Existing")
+            naming=plan["modlist_context"]["naming_conventions"]
+            self.assertTrue(naming["explicit_name_required"]); self.assertGreaterEqual(naming["categorized_mods"]+naming["uncategorized_mods"],1)
+            self.assertIn("placement_decision_order",plan["modlist_context"])
+
+    def test_plan_surfaces_profile_naming_conventions_and_related_mods(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; archive=root/'Babo Dialogue.zip'; self.archive(archive)
+            lines=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('+Ordinary Existing','+[NSFW] 对话扩展——Babo Dialogue Base\n+[NSFW] 动画框架——Other Framework\n+Ordinary Existing')
+            (profile/'modlist.txt').write_text(lines,encoding='utf-8-sig',newline='\n')
+            plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},root/'plans',name='[NSFW] 对话扩展——Babo Dialogue Patch')
+            context=plan['modlist_context']; self.assertEqual(context['naming_conventions']['requested_name'],'[NSFW] 对话扩展——Babo Dialogue Patch')
+            self.assertEqual(context['naming_conventions']['category_prefixes'][0]['prefix'],'[NSFW]')
+            related=context['related_mods']; self.assertEqual(related[0]['name'],'[NSFW] 对话扩展——Babo Dialogue Base')
+            self.assertIn('babo',related[0]['matching_tokens']); self.assertIn('dialogue',related[0]['matching_tokens'])
 
     def test_duplicate_anchor_is_rejected_before_any_deduplication(self):
         lines = [HEADER, "+Anchor", "-Anchor", "+Other"]
@@ -376,6 +392,267 @@ Attributes = A
             self.assertEqual(plan['fomod_resolution']['environment']['file_states'],{'Generated.esp':'Active'})
             self.assertEqual(plan['fomod_resolution']['environment']['file_providers'],{'Generated.esp':['overwrite']})
 
+
+
+    def test_fomod_comments_are_advisory_and_case_is_reported_faithfully(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/'Comments.zip'
+            xml='''<config><!-- <file source="Ignored.esp" destination="Ignored.esp"/> --><requiredInstallFiles><!-- around file --><file source="Core.esp" destination="Core.esp"/></requiredInstallFiles><!-- <pattern/> --></config>'''
+            with zipfile.ZipFile(archive,'w') as z:
+                z.writestr('Fomod/ModuleConfig.xml',xml); z.writestr('Core.esp','plugin'); z.writestr('Ignored.esp','ignored')
+            descriptor=fomod_options(archive)
+            self.assertEqual(descriptor['source'],'Fomod/ModuleConfig.xml')
+            self.assertEqual(descriptor['canonical_source'],'fomod/ModuleConfig.xml')
+            self.assertTrue(descriptor['case_variant'])
+            preview=fomod_preview(archive,{'mo2_instance_path':str(instance),'profile':'Default'})
+            warning=next(item for item in preview['validation_warnings'] if item['type']=='CommentsPresentWarning')
+            self.assertTrue(warning['upstream_critical']); self.assertFalse(warning['critical']); self.assertFalse(warning['blocking']); self.assertTrue(warning['advisory'])
+            self.assertEqual(preview['plugins'],['Core.esp'])
+            self.assertNotIn('Ignored.esp',[Path(item['source']).name for item in preview['selected_files']])
+
+    def test_selections_schema_and_unknown_ids_are_input_errors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/'Selections.zip'; self.archive(archive,True)
+            cfg={'mo2_instance_path':str(instance),'profile':'Default'}
+            invalid=['0:0',None,3,[],{'0:0':'0:0:0'},{'0:0':None},{'0:0':{}},{'0:0':[1]},{1:[]}]
+            for index,value in enumerate(invalid):
+                with self.subTest(value=value), self.assertRaises(WorkflowError) as caught:
+                    create_plan(archive,cfg,root/f'plans-{index}',selections=value)
+                self.assertEqual(caught.exception.code,2)
+                self.assertIn('field',caught.exception.details); self.assertIn('expected',caught.exception.details); self.assertIn('actual',caught.exception.details); self.assertIn('example',caught.exception.details)
+            with self.assertRaises(WorkflowError) as caught:
+                create_plan(archive,cfg,root/'unknown-group',selections={'9:9':[]})
+            self.assertEqual(caught.exception.code,2); self.assertEqual(caught.exception.details['unknown_groups'],['9:9'])
+            with self.assertRaises(WorkflowError) as caught:
+                create_plan(archive,cfg,root/'unknown-option',selections={'0:0':['0:0:9']})
+            self.assertEqual(caught.exception.code,2); self.assertEqual(caught.exception.details['unknown_options'],{'0:0':['0:0:9']})
+            plan=create_plan(archive,cfg,root/'valid',selections={'0:0':['0:0:0']})
+            self.assertEqual(plan['selections'],{'0:0':['0:0:0']})
+
+    def test_anchor_candidates_never_replace_exact_matching(self):
+        lines=[HEADER,'+[NSFW] SLAL_SE','+Prefix SLAL_SE','+Unrelated']
+        with self.assertRaises(WorkflowError) as caught:
+            _place_mods(lines,['New'],{'after_mod':'SLAL_SE'})
+        self.assertEqual(caught.exception.code,2)
+        self.assertEqual(caught.exception.details['candidates'],[{'name':'[NSFW] SLAL_SE','reason':'tag_stripped_exact','line':2}])
+        self.assertEqual(lines,[HEADER,'+[NSFW] SLAL_SE','+Prefix SLAL_SE','+Unrelated'])
+
+    def test_auto_replan_applies_equivalent_unrelated_profile_drift(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; archive=root/'Equivalent.zip'; self.archive(archive)
+            plans=root/'plans'; plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},plans)
+            path=plans/f"{plan['id']}.json"
+            text=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('*DLC: Dawnguard','+Unrelated\n*DLC: Dawnguard')
+            (profile/'modlist.txt').write_text(text,encoding='utf-8-sig',newline='\n')
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]):
+                result=apply_plan(path,None,self.placement(),auto_replan=True)
+            self.assertEqual(result['status'],'complete'); self.assertTrue(result['replan']['attempted']); self.assertTrue(result['replan']['equivalent'])
+            self.assertNotEqual(result['replan']['original_plan_id'],result['replan']['effective_plan_id'])
+            original=json.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual(original['status'],'superseded'); self.assertEqual(original['superseded_by'],result['id'])
+            self.assertTrue((instance/'mods'/plan['mod_name']/'Test.esp').is_file())
+
+    def test_auto_replan_requires_review_for_new_conflict_without_mo2_writes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; archive=root/'Conflict.zip'; self.archive(archive)
+            plans=root/'plans'; plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},plans); path=plans/f"{plan['id']}.json"
+            provider=instance/'mods'/'New Provider'; provider.mkdir(); (provider/'Test.esp').write_text('conflict',encoding='utf-8')
+            text=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('*DLC: Dawnguard','+New Provider\n*DLC: Dawnguard')
+            (profile/'modlist.txt').write_text(text,encoding='utf-8-sig',newline='\n')
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), self.assertRaises(WorkflowError) as caught:
+                apply_plan(path,None,self.placement(),auto_replan=True)
+            self.assertEqual(caught.exception.code,1); self.assertEqual(caught.exception.details['status'],'replan_review_required')
+            self.assertTrue(any(change['path'].startswith('$.conflict_file_providers') for change in caught.exception.details['semantic_changes']))
+            self.assertTrue((plans/f"{caught.exception.details['new_plan_id']}.json").is_file())
+            self.assertFalse((instance/'mods'/plan['mod_name']).exists()); self.assertFalse((instance/'_agent_toolkit_backups').exists())
+
+    def test_auto_replan_anchor_loss_returns_review_with_candidates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; archive=root/'Anchor.zip'; self.archive(archive)
+            plans=root/'plans'; plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},plans); path=plans/f"{plan['id']}.json"
+            text=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('+'+SEPARATOR,'+[Generated] '+SEPARATOR)
+            (profile/'modlist.txt').write_text(text,encoding='utf-8-sig',newline='\n')
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), self.assertRaises(WorkflowError) as caught:
+                apply_plan(path,None,self.placement(),auto_replan=True)
+            self.assertEqual(caught.exception.code,1); review=caught.exception.details['placement_review']
+            self.assertEqual(review['details']['candidates'][0]['reason'],'tag_stripped_exact')
+            self.assertTrue((plans/f"{caught.exception.details['new_plan_id']}.json").is_file())
+            self.assertFalse((instance/'_agent_toolkit_backups').exists())
+
+    def test_equivalent_replan_failure_rolls_back_replacement_transaction(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; archive=root/'RollbackReplan.zip'; self.archive(archive)
+            plans=root/'plans'; plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},plans); path=plans/f"{plan['id']}.json"
+            text=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('*DLC: Dawnguard','+Unrelated\n*DLC: Dawnguard')
+            (profile/'modlist.txt').write_text(text,encoding='utf-8-sig',newline='\n'); current=(profile/'modlist.txt').read_bytes()
+            failed={'status':'failed','checks':{'forced':False}}
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), patch('mo2_agent_toolkit.workflow.audit_profile',return_value=failed), self.assertRaises(WorkflowError):
+                apply_plan(path,None,self.placement(),auto_replan=True)
+            original=json.loads(path.read_text(encoding='utf-8')); replacement=plans/f"{original['superseded_by']}.json"
+            self.assertEqual(json.loads(replacement.read_text(encoding='utf-8'))['status'],'rolled_back')
+            self.assertEqual((profile/'modlist.txt').read_bytes(),current); self.assertFalse((instance/'mods'/plan['mod_name']).exists())
+
+
+    def test_auto_replan_reviews_operation_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; archive=root/'Operation.zip'; self.archive(archive)
+            plans=root/'plans'; plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},plans); path=plans/f"{plan['id']}.json"
+            target=instance/'mods'/plan['mod_name']; target.mkdir(); (target/'Old.esp').write_text('old',encoding='utf-8')
+            text=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('*DLC: Dawnguard',f"+{plan['mod_name']}\n*DLC: Dawnguard")
+            (profile/'modlist.txt').write_text(text,encoding='utf-8-sig',newline='\n')
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), self.assertRaises(WorkflowError) as caught:
+                apply_plan(path,None,self.placement(),auto_replan=True)
+            self.assertEqual(caught.exception.code,1)
+            operation=next(change for change in caught.exception.details['semantic_changes'] if change['path']=='$.operation')
+            self.assertEqual((operation['old'],operation['new']),('install','update'))
+            self.assertEqual(json.loads((plans/f"{caught.exception.details['new_plan_id']}.json").read_text(encoding='utf-8'))['operation'],'update')
+            self.assertFalse((instance/'_agent_toolkit_backups').exists())
+
+    def test_auto_replan_reviews_update_adjacency_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'
+            target=instance/'mods'/'Example'; target.mkdir(); (target/'Test.esp').write_text('old',encoding='utf-8')
+            modlist=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('+Ordinary Existing','+Example\n+Ordinary Existing')
+            (profile/'modlist.txt').write_text(modlist,encoding='utf-8-sig',newline='\n')
+            archive=root/'Example.zip'; self.archive(archive)
+            plans=root/'plans'; plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},plans); path=plans/f"{plan['id']}.json"
+            self.assertEqual(plan['operation'],'update')
+            changed=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('+Example\n+Ordinary Existing','+Example\n+Inserted Neighbor\n+Ordinary Existing')
+            (profile/'modlist.txt').write_text(changed,encoding='utf-8-sig',newline='\n')
+            before=changed
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), self.assertRaises(WorkflowError) as caught:
+                apply_plan(path,None,auto_replan=True)
+            self.assertEqual(caught.exception.code,1); self.assertEqual(caught.exception.details['status'],'replan_review_required')
+            self.assertTrue(any(item['path'].endswith('.next_mod') for item in caught.exception.details['semantic_changes']))
+            self.assertEqual((profile/'modlist.txt').read_text(encoding='utf-8-sig'),before)
+            self.assertFalse((instance/'_agent_toolkit_backups').exists())
+
+    def test_auto_replan_reviews_fomod_dependency_result_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; game=root/'Game'; (game/'Data').mkdir(parents=True)
+            archive=root/'DependencyChange.zip'
+            xml='''<config><installSteps><installStep name="Choice"><optionalFileGroups><group name="Patch" type="SelectAny"><plugins><plugin name="Conditional"><files><file source="Patch.esp" destination="Patch.esp"/></files><typeDescriptor><dependencyType><defaultType name="Optional"/><patterns><pattern><dependencies><fileDependency file="Trigger.esp" state="Active"/></dependencies><type name="Recommended"/></pattern></patterns></dependencyType></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep></installSteps></config>'''
+            with zipfile.ZipFile(archive,'w') as z:z.writestr('fomod/ModuleConfig.xml',xml); z.writestr('Patch.esp','plugin')
+            cfg={'mo2_instance_path':str(instance),'profile':'Default','skyrim_game_path':str(game)}; plans=root/'plans'
+            plan=create_plan(archive,cfg,plans,selections={'0:0':[]}); path=plans/f"{plan['id']}.json"
+            provider=instance/'mods'/'Trigger Provider'; provider.mkdir(); (provider/'Trigger.esp').write_text('trigger',encoding='utf-8')
+            text=(profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('*DLC: Dawnguard','+Trigger Provider\n*DLC: Dawnguard')
+            (profile/'modlist.txt').write_text(text,encoding='utf-8-sig',newline='\n')
+            (profile/'plugins.txt').write_text(f'{HEADER}\n*Trigger.esp\n',encoding='utf-8-sig')
+            (profile/'loadorder.txt').write_text(f'{HEADER}\nTrigger.esp\n',encoding='utf-8-sig')
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), self.assertRaises(WorkflowError) as caught:
+                apply_plan(path,None,self.placement(),auto_replan=True)
+            self.assertEqual(caught.exception.code,1)
+            self.assertTrue(any(change['path'].startswith('$.fomod_resolution') for change in caught.exception.details['semantic_changes']))
+            self.assertFalse((instance/'_agent_toolkit_backups').exists())
+
+    def test_auto_replan_does_not_bypass_archive_process_or_plan_state_safety(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); profile=instance/'profiles'/'Default'; archive=root/'Safety.zip'; self.archive(archive)
+            plans=root/'plans'; cfg={'mo2_instance_path':str(instance),'profile':'Default'}
+            plan=create_plan(archive,cfg,plans); path=plans/f"{plan['id']}.json"
+            (profile/'modlist.txt').write_text((profile/'modlist.txt').read_text(encoding='utf-8-sig').replace('*DLC: Dawnguard','+Drift\n*DLC: Dawnguard'),encoding='utf-8-sig',newline='\n')
+            with zipfile.ZipFile(archive,'a') as z:z.writestr('Changed.txt','changed')
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), self.assertRaises(WorkflowError) as archive_error:
+                apply_plan(path,None,self.placement(),auto_replan=True)
+            self.assertEqual(archive_error.exception.code,2); self.assertEqual(len(list(plans.glob('*.json'))),1)
+            self.archive(archive)
+            plan=create_plan(archive,cfg,plans); path=plans/f"{plan['id']}.json"
+            (profile/'modlist.txt').write_text((profile/'modlist.txt').read_text(encoding='utf-8-sig')+'+More Drift\n',encoding='utf-8-sig',newline='\n')
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=['ModOrganizer.exe']), self.assertRaises(WorkflowError) as process_error:
+                apply_plan(path,None,self.placement(),auto_replan=True)
+            self.assertEqual(process_error.exception.code,3); self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['status'],'planned')
+            data=json.loads(path.read_text(encoding='utf-8')); data['status']='complete'; path.write_text(json.dumps(data),encoding='utf-8')
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), self.assertRaises(WorkflowError) as state_error:
+                apply_plan(path,None,self.placement(),auto_replan=True)
+            self.assertEqual(state_error.exception.code,2); self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['status'],'complete')
+
+
+    def test_data_folder_plan_and_apply_promotes_data_and_preserves_root_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/"DataPackage.zip"
+            with zipfile.ZipFile(archive,"w") as zipped:
+                zipped.writestr("Data/Test.esp","plugin")
+                zipped.writestr("Data/meshes/example.nif","mesh")
+                zipped.writestr("README.txt","readme")
+            plans=root/"plans"
+            plan=create_plan(archive,{"mo2_instance_path":str(instance),"profile":"Default"},plans,name="Data Package")
+            self.assertEqual(plan["handler"],"data-folder")
+            with patch("mo2_agent_toolkit.workflow.mo2_running",return_value=[]):
+                result=apply_plan(plans/f"{plan['id']}.json",None,self.placement())
+            target=instance/"mods"/"Data Package"
+            self.assertFalse((target/"Data").exists())
+            self.assertTrue((target/"Test.esp").is_file())
+            self.assertTrue((target/"meshes"/"example.nif").is_file())
+            self.assertTrue((target/"README.txt").is_file())
+            self.assertEqual(result["staged_validation"]["plugins"],["Test.esp"])
+
+    def test_apply_blocks_newly_recognized_installer_risk_from_older_plan(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/'Example.zip'
+            with zipfile.ZipFile(archive,'w') as zipped:zipped.writestr('Example.esp','plugin')
+            plans=root/'plans'; plan=create_plan(archive,{'mo2_instance_path':str(instance),'profile':'Default'},plans,name='Example')
+            plan_path=plans/f"{plan['id']}.json"
+            older=json.loads(plan_path.read_text(encoding='utf-8'))
+            for key in ('handler','support_status','support_reason','installer_risk'):
+                older['layout'].pop(key,None)
+            plan_path.write_text(json.dumps(older),encoding='utf-8')
+            risky=dict(plan['layout']); risky.update(handler='unsupported',support_status='risky',support_reason='executable_installer',installer_risk={'type':'executable_installer'})
+            with patch('mo2_agent_toolkit.workflow.mo2_running',return_value=[]), patch('mo2_agent_toolkit.workflow.detect_layout',return_value=risky), self.assertRaises(WorkflowError) as caught:
+                apply_plan(plan_path,None,self.placement())
+            self.assertEqual(caught.exception.code,3)
+            self.assertEqual(caught.exception.details['current_layout']['installer_risk']['type'],'executable_installer')
+            self.assertFalse((instance/'_agent_toolkit_backups'/plan['id']).exists())
+
+    def test_scripted_fomod_is_blocked_before_plan_creation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); instance=self.instance(root); archive=root/"Scripted.zip"; plans=root/"plans"
+            with zipfile.ZipFile(archive,"w") as zipped:
+                zipped.writestr("fomod/ModuleConfig.xml","<config/>")
+                zipped.writestr("fomod/Script.cs","public class Script {}")
+                zipped.writestr("Test.esp","plugin")
+            with self.assertRaises(WorkflowError) as caught:
+                create_plan(archive,{"mo2_instance_path":str(instance),"profile":"Default"},plans,name="Scripted")
+            self.assertEqual(caught.exception.code,3)
+            self.assertEqual(caught.exception.details["risk"]["type"],"fomod_csharp")
+            self.assertFalse(plans.exists())
+
+    def test_archive_source_moves_mo2_meta_sidecar_with_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); source=root/"Example.zip"; source.write_bytes(b"archive")
+            sidecar=Path(str(source)+".meta"); sidecar.write_text("[General]\ninstalled=true\n",encoding="utf-8")
+            result=archive_source(source,root/"archive")
+            target=Path(result["path"]); target_meta=Path(str(target)+".meta")
+            self.assertEqual(result["meta"]["status"],"moved")
+            self.assertTrue(target.is_file()); self.assertTrue(target_meta.is_file())
+            self.assertFalse(source.exists()); self.assertFalse(sidecar.exists())
+            self.assertIn("installed=true",target_meta.read_text(encoding="utf-8"))
+
+    def test_archive_source_preserves_different_sidecars_on_same_content_collision(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); destination=root/"archive"; destination.mkdir()
+            target=destination/"Example.zip"; target.write_bytes(b"same")
+            Path(str(target)+".meta").write_text("target",encoding="utf-8")
+            source=root/"Example.zip"; source.write_bytes(b"same")
+            Path(str(source)+".meta").write_text("source",encoding="utf-8")
+            result=archive_source(source,destination,"123")
+            moved=Path(result["path"]); moved_meta=Path(str(moved)+".meta")
+            self.assertEqual(moved.name,"Example-123.zip")
+            self.assertEqual(moved_meta.read_text(encoding="utf-8"),"source")
+            self.assertEqual(Path(str(target)+".meta").read_text(encoding="utf-8"),"target")
+
+    def test_archive_source_rolls_archive_back_when_sidecar_move_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); destination=root/"archive"; source=root/"Example.zip"; source.write_bytes(b"archive")
+            sidecar=Path(str(source)+".meta"); sidecar.write_text("meta",encoding="utf-8")
+            original=shutil.move
+            def fail_sidecar(src,dst,*args,**kwargs):
+                if str(src).casefold().endswith(".meta"):raise OSError("sidecar denied")
+                return original(src,dst,*args,**kwargs)
+            with patch("mo2_agent_toolkit.workflow.shutil.move",side_effect=fail_sidecar),self.assertRaises(OSError):
+                archive_source(source,destination)
+            self.assertTrue(source.is_file()); self.assertTrue(sidecar.is_file())
+            self.assertFalse((destination/"Example.zip").exists())
 
 
 if __name__ == "__main__":
