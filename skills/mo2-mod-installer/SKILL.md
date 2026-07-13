@@ -1,81 +1,79 @@
 ---
 name: mo2-mod-installer
-description: Safely inspect, plan, install, update, validate, back up, or restore Skyrim SE/AE mods in Mod Organizer 2 with the bundled mo2-tool CLI.
+description: Safely inspect, plan, install, update, validate, archive, back up, or restore Skyrim SE/AE mods in Mod Organizer 2 with the bundled mo2-tool CLI.
 ---
 
 # MO2 Mod Installer
 
-Use the `bin/mo2-tool.exe` shipped inside this loaded Skill Bundle as the only mutation engine. Never edit MO2 profile files or move installed mods directly.
+Use the `bin/mo2-tool.exe` shipped inside this loaded Skill Bundle as the only mutation engine. Never edit MO2 profile files, move installed mods, or emulate MO2's virtual file tree directly.
 
 ## Tool location
 
 - `bin` is relative to the directory containing this `SKILL.md`, never to the shell's current working directory.
-- Claude Code must invoke `$HOME/.claude/skills/mo2-mod-installer/bin/mo2-tool.exe`; Codex must invoke `$HOME/.codex/skills/mo2-mod-installer/bin/mo2-tool.exe`. Resolve the full absolute path before the first command and keep using that exact executable.
-- On Windows always include `.exe`. Never call `bin/mo2-tool`, search a source checkout's `dist` directory, copy the executable, or fall back to another `mo2-tool` on `PATH`.
-- Require `bin/mo2-tool.exe` and `bin/_internal` to exist. If either is missing, stop and report a damaged Bundle rather than attempting repair during a mod operation.
-- Command examples below abbreviate the resolved absolute executable as `mo2-tool`; substitute the full Skill path when executing them.
+- Claude Code must invoke `$HOME/.claude/skills/mo2-mod-installer/bin/mo2-tool.exe`; Codex must invoke `$HOME/.codex/skills/mo2-mod-installer/bin/mo2-tool.exe`. Resolve the full absolute path once and keep using that executable.
+- On Windows include `.exe`. Never call `bin/mo2-tool`, search a source checkout's `dist`, copy the executable, or fall back to another `mo2-tool` on `PATH`.
+- Require both `bin/mo2-tool.exe` and `bin/_internal`. If either is missing, stop and report a damaged Bundle.
+- Examples abbreviate the resolved executable as `mo2-tool`. Substitute the absolute Skill path when executing them.
 
-## Required installation flow
+## Canonical installation workflow
 
-1. Run `mo2-tool doctor --json`. Resolve configuration first and close MO2 before any mutation.
-2. Resolve Nexus metadata/dependencies when applicable.
-3. Run `mo2-tool install inspect <archive> --json`. Read `layout.handler`, `layout.support_status`, `layout.installer_risk`, `layout.nesting_root`, `layout.flatten`, `layout.effective_root_entries`, FOMOD choices, and manual follow-up advice. Continue only for supported `simple`, `data-folder`, or XML `fomod` handling. A `data-folder` result means the top-level `Data/` will be promoted while root documentation is preserved. Stop before plan/apply for `risky` or `unsupported`; never execute C# FOMOD, OMOD, NCC, or explicit installer entry points. Route recognized game-root packages to `root inspect/deploy`, never ordinary install.
-4. Determine a final MO2 name from the mod purpose and the active Profile’s established taxonomy, then run `mo2-tool install plan <archive> --name "<reviewed classified name>" [--selections selections.json] [--modid <id> --file-id <id>] --json`. A selections file must be a JSON object of string group IDs to arrays of string option IDs, for example `{"0:0":["0:0:0"]}`. For Nexus files, both IDs are required together so the plan freezes official source metadata. The plan returns current `modlist_context`: file order, observed naming categories/examples, separators and positions, conflict providers, lexical related-mod evidence, and the reverse-order explanation.
-5. The agent must choose priority from evidence rather than using a generic default. For a new install, choose exactly one explicit file-direction placement and provide `--placement-reason "<why this adjacency and overwrite direction are correct>"`: `--before-mod <name>`, `--after-mod <name>`, `--modlist-top`, or `--modlist-bottom`. For an auto-detected same-folder update, require `placement.mode=preserve_existing` and do not provide any placement flag.
-6. Present the proposed classified name, naming rationale, related-mod grouping, exact neighbors, overwrite direction, layout, selections, source metadata, operation, and plugins to the user. After one explicit confirmation, run `mo2-tool install apply <plan-id> --yes <placement> --placement-reason "<reviewed rationale>" --json` for a new install, or omit placement and placement reason for an in-place update.
-7. Read the returned `final_placement` adjacency and `profile_audit`. Run `mo2-tool profile audit --json` for the normal post-write audit.
+1. Run `mo2-tool doctor --json`. Use `setup --json` only when configuration is absent. Close MO2 and game-related processes before mutation.
+2. For Nexus sources, resolve metadata and dependencies, then obtain the archive through the supported Premium or official browser-assisted flow.
+3. Run `mo2-tool install inspect <archive> --json` and branch on `layout.handler`, `layout.support_status`, and `layout.installer_risk`.
+4. Inspect the mod purpose, archive contents, selected FOMOD files, plugins, and active Profile taxonomy. Choose an explicit final MO2 `--name`; never pass through the archive filename merely for convenience.
+5. Run `mo2-tool install plan <archive> --name "<reviewed name>" [--selections selections.json] [--modid <id> --file-id <id>] --json`. Use `--full-context` only when the concise placement context is insufficient.
+6. Choose placement from dependency, patch/base, same-family, conflict-provider, and Profile-category evidence. Present the name, rationale, exact neighbors, overwrite direction, layout, selections, source metadata, operation, and plugins to the user.
+7. After one explicit confirmation, apply a new install with exactly one placement plus `--placement-reason`, or apply an auto-detected same-folder update without placement arguments.
+8. Read `final_placement`, `profile_audit`, `archive_result`, and `manual_post_install_steps`; then run `mo2-tool profile audit --json`.
 
-`before_mod` and `after_mod` are defined in `modlist.txt` file direction. Earlier file lines mean higher MO2 priority and a lower visible left-pane position. The result reports both file-direction neighbors and the corresponding MO2 left-pane neighbors.
+Read `references/tool-usage.md` for exact command recipes and failure handling. Read `references/agent-contract.md` when consuming JSON, automating Apply/Resume, or validating transaction semantics.
 
-## Naming and placement policy
+## Archive routing
 
-- Every new installation needs an explicit final `--name`. Never pass through the archive filename unchanged merely because it is convenient. Inspect the mod description/metadata, selected files and plugins, then follow `modlist_context.naming_conventions` and the active Profile's dominant pattern. For this Profile that normally means an established `[category]`, a concise Chinese functional label when that is the prevailing style, `——`, and a recognizable original English title. Reuse an existing category whenever it fits; do not invent a parallel taxonomy.
-- Treat naming and placement as one organization decision. Keep base mods, patches, addons, framework components, animation packs, appearance families, and other clearly related mods adjacent whenever overwrite semantics permit.
-- Choose placement in this order: exact base/patch dependency; same mod family/framework; intentional conflict-provider overwrite; closest functional peers in the same established category block; only then a generic separator/top/bottom fallback. State the evidence and intended overwrite direction in `--placement-reason`.
-- Do not infer priority from archive name, Nexus category, or file type alone. Combine Nexus purpose/dependencies, FOMOD choices, plugins, selected paths, file-conflict providers, related candidates, and current Profile structure. Lexical `related_mods` are candidates, not automatic truth.
-- For this user's fixed output group, place an ordinary mod after `—————— 其他模组生成 ——————_separator` only when no stronger related-mod/category placement exists and explain that fallback. Put a mod inside the generated-output group only when the user explicitly identifies it as generated output.
-- A missing or duplicated anchor is a hard stop. Suggested `candidates` (exact names, reasons, and `modlist.txt` lines) are review hints only; never substitute one automatically or retry at highest priority.
-- For multiple `--enable-mod` arguments to `profile apply`, pass them in high-to-low MO2 priority order and provide one exact mod anchor/top/bottom option. Untouched mods retain relative order.
+| Inspect result | Agent action |
+|---|---|
+| supported `simple` | Continue through plan/apply. A single ordinary wrapper may be flattened. |
+| supported `data-folder` | Continue. Promote the one top-level `Data/` directory and preserve root documentation. |
+| supported XML `fomod` | Require explicit stable selections, then plan only the resolved files. |
+| `risky` or `unsupported` | Stop before plan/apply and report `installer_risk`/`support_reason`. |
+| recognized game-root package | Route to `root inspect/deploy`, never ordinary install. |
 
-## Staging and transaction guarantees
+Never execute C# FOMOD, OMOD, NCC, or explicit setup/install entry points. An ordinary staged mod must expose a plugin/BSA or standard Data directory at its final root. Missing or duplicate placement anchors and invalid staged roots are hard stops; returned candidates are review hints, never automatic authorization.
 
-- Apply extracts under the transaction directory, applies the planned single-wrapper flattening, top-level `Data/` promotion, or XML FOMOD selection, and validates the final staged root before touching `mods/`. It does not construct or emulate MO2's virtual file tree.
-- An ordinary mod must expose at least one plugin/BSA or standard Data directory at its final root. Invalid staging returns current root entries, suspected wrappers, and paths to inspect.
-- Plugin activation comes from a fresh scan of the final staged tree, not archive inspection guesses.
-- Nexus `meta.ini` is created or merged in staging, unknown existing keys are preserved, and the official Mod/file IDs, filename, version, and installed-file identity are validated after commit.
-- Committed content (excluding generated `meta.ini`) is compared to the staged SHA-256 manifest before success is reported.
-- Mod replacement, mod activation, plugin activation, load order, placement, and audit are one transaction. Failure restores the old mod plus `modlist.txt`, `plugins.txt`, and `loadorder.txt`.
-- `install apply/resume --auto-replan` handles only checksum drift in the three Profile files. It may continue under the existing confirmation only when the replacement plan is semantically equivalent; `replan_review_required` means review and explicitly apply the returned new plan. It never bypasses archive drift, a running MO2/Skyrim process, or illegal plan state.
+## Naming and placement
 
+- Follow `modlist_context.naming_conventions` and the active Profile's established taxonomy. Reuse an existing category, follow the prevailing localized-description style, and retain a recognizable original title.
+- Keep base mods, patches, addons, framework components, animation packs, appearance families, and other clearly related mods adjacent when overwrite semantics permit.
+- Prefer placement evidence in this order: exact dependency/base relationship; same family/framework; intentional conflict order; closest functional peer in the established category; reviewed fallback separator.
+- `before_mod` and `after_mod` use `modlist.txt` file direction: earlier lines have higher MO2 priority and a lower visible left-pane position. Verify both file-direction and left-pane neighbors from the result.
+- Do not infer placement from a similar name, Nexus category, or file type alone. A missing or duplicated exact anchor is a hard stop.
+- For this user's fixed fallback, place an ordinary mod after `—————— 其他模组生成 ——————_separator` only when no stronger placement exists. Put a mod inside the generated-output group only when the user explicitly identifies it as generated output.
 
-## Same-folder updates
+## FOMOD and same-folder updates
 
-- Identify an update by an exact existing Mod folder/profile entry. Ambiguous, missing, or duplicated identity is a hard stop.
-- Preserve the exact `modlist.txt` position and the existing `+`/`-` state. Reject explicit placement flags and stop if profile adjacency/state drifted since planning.
-- Preserve states for retained plugins. Add newly introduced plugins to `plugins.txt` disabled by default and remove disappeared plugins from both `plugins.txt` and `loadorder.txt`.
-- Treat the old Mod folder, `modlist.txt`, `plugins.txt`, and `loadorder.txt` as one rollback unit. Metadata or content audit failure restores all four.
-- Legacy mutating `install legacy` and top-level `update` are disabled; their `--dry-run` compatibility mode is read-only. Use canonical inspect/plan/apply for mutations.
+- A selections file is a JSON object of string group IDs to arrays of string option IDs, for example `{"0:0":["0:0:0"]}`. Schema errors and unknown IDs are exit-2 input errors; never install every file as fallback.
+- Treat final `blocking`, `critical`, and `advisory` fields as authoritative. XML comments are advisory and ignored; syntax or semantic-changing validation failures remain blocking.
+- Identify updates by an exact existing Mod folder/Profile entry. Preserve its exact position and enabled/disabled marker; reject ambiguous identity or state/adjacency drift.
+- Preserve retained plugin states, add newly introduced plugins disabled when the mod is enabled, leave them unregistered when it is disabled, and remove disappeared plugins from `plugins.txt` and `loadorder.txt`.
+- Legacy mutating `install legacy` and top-level `update` are disabled. Only their read-only dry-run compatibility remains; use inspect/plan/apply for every mutation.
 
-## Profile apply
+## Mutation and recovery guarantees
 
-Use exact mod placement for direct profile changes:
+- Apply extracts and resolves content under a transaction directory, validates staging, rescans plugins, creates/merges Nexus `meta.ini`, and verifies a SHA-256 manifest before reporting success.
+- Mod replacement, mod activation, plugin states, load order, placement, and Profile audit are one transaction. Failure restores the old Mod plus `modlist.txt`, `plugins.txt`, and `loadorder.txt`.
+- `install apply/resume --auto-replan` handles only checksum drift in those three Profile files. Continue under the existing confirmation only for a semantically equivalent replacement; `replan_review_required` requires review and an explicit Apply of the returned plan.
+- Archive drift, running processes, illegal plan state, and safety exit 3 are never bypassed.
+- Post-commit archive movement is separate from the MO2 transaction. Report warnings and use `archive retry`; do not reinstall an already committed mod merely because archiving failed.
 
-```text
-mo2-tool profile apply <profile> --enable-mod "Mod A" --enable-mod "Mod B"   --after-mod "—————— 其他模组生成 ——————_separator"
-```
+## Other supported flows
 
-`Mod A`, then `Mod B`, is high-to-low MO2 priority. Plugin positioning remains separately controlled by `--after-plugin`.
-
-## Manual follow-up and exceptions
-
-Always report `manual_post_install_steps`, including an empty list. They are recommendations only. Never run BodySlide, Pandora, Nemesis, or FNIS unless explicitly requested in the current turn. Use dedicated generated-output mods rather than `Overwrite`.
-
-SKSE and Engine Fixes root/AIO packages use `root inspect`, `root deploy --dry-run`, confirmation, then `root deploy --yes`. Unknown root signatures are safety blocks. Nexus credentials must remain in Windows DPAPI and never appear in chat, arguments, logs, or JSON.
-
-## FOMOD validation contract
-
-Treat `CommentsPresentWarning` as advisory: comment contents are ignored even when `upstream_critical` is true. Trust the toolkit's final `blocking`, `critical`, and `advisory` fields; syntax and semantic-changing validation failures remain blocking. `fomod.source` preserves archive spelling, while `canonical_source` and `case_variant` explain canonical-path recognition.
+- Profile mutations: run `profile apply ... --dry-run --json`, confirm, apply, then audit. Mod placement is explicit. Plugin actions support enabled, disabled, and unregistered states; the CLI does not reorder plugins.
+- Game-root packages: `root inspect`, `root deploy --dry-run`, confirmation, then `root deploy --yes`. Unknown signatures are safety blocks.
+- Backup restore: list, inspect the manifest, obtain explicit confirmation, then restore.
+- Always report `manual_post_install_steps`, including an empty list. Never run BodySlide, Pandora, Nemesis, or FNIS without an explicit current-turn request; use dedicated generated-output mods rather than `Overwrite`.
+- Nexus credentials remain protected by Windows DPAPI and must never appear in chat, arguments, logs, or JSON.
+- NPC FaceGen work is outside this Skill's installation guide; use the dedicated NPC conflict Skill.
 
 ## Result contract
 
-JSON envelopes use `schema_version`, `tool_version`, `status`, `warnings`, `errors`, and `data`. Exit 0 is success, 1 review/warning, 2 input/configuration error, 3 safety block, 4 network error, 5 filesystem/tool error, and 10 internal error. Read `references/agent-contract.md` for automation details.
+JSON envelopes use `schema_version`, `tool_version`, `status`, `warnings`, `errors`, and `data`. Exit 0 is success, 1 review/warning, 2 input/configuration error, 3 safety block, 4 network error, 5 filesystem/tool error, and 10 internal error. Never parse human output when JSON is available.

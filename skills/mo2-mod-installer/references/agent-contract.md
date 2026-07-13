@@ -1,5 +1,7 @@
 # Agent contract
 
+Use `tool-usage.md` for exact command recipes, operator-facing branch handling, and recovery examples. This document defines the stable automation and safety contract.
+
 Resolve `bin/mo2-tool.exe` relative to the loaded `mo2-mod-installer` Skill directory and invoke that absolute path with the `.exe` suffix. Claude Code uses `$HOME/.claude/skills/mo2-mod-installer/bin/mo2-tool.exe`; Codex uses `$HOME/.codex/skills/mo2-mod-installer/bin/mo2-tool.exe`. Never resolve `bin` from the current working directory, search `dist`, copy the executable, or fall back to `PATH`. A missing executable or `_internal` directory means the Bundle is damaged and is a hard stop. Always request JSON for discovery, inspection, planning, apply, and audit. Exit 1 is review, not a crash. Never bypass safety exit 3. Never parse human output when JSON exists or expose DPAPI credentials.
 
 ## Ordinary MO2 installation

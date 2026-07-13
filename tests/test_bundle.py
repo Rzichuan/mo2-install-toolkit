@@ -4,23 +4,50 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SKILL = ROOT / "skills" / "mo2-mod-installer"
 
 
 class BundleContractTests(unittest.TestCase):
     def test_one_authoritative_skill_source(self):
-        skill = ROOT / "skills" / "mo2-mod-installer" / "SKILL.md"
-        contract = ROOT / "skills" / "mo2-mod-installer" / "references" / "agent-contract.md"
+        skill = SKILL / "SKILL.md"
+        contract = SKILL / "references" / "agent-contract.md"
+        usage = SKILL / "references" / "tool-usage.md"
         self.assertTrue(skill.is_file())
         self.assertTrue(contract.is_file())
+        self.assertTrue(usage.is_file())
         self.assertFalse((ROOT / "claude" / "skills" / "mo2-mod-installer").exists())
 
     def test_skill_requires_absolute_bundled_executable(self):
-        text = (ROOT / "skills" / "mo2-mod-installer" / "SKILL.md").read_text(encoding="utf-8")
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("$HOME/.claude/skills/mo2-mod-installer/bin/mo2-tool.exe", text)
         self.assertIn("$HOME/.codex/skills/mo2-mod-installer/bin/mo2-tool.exe", text)
         self.assertIn("bin/_internal", text)
         self.assertIn("never to the shell's current working directory", text)
         self.assertIn("fall back to another `mo2-tool` on `PATH`", text)
+
+    def test_skill_uses_layered_tool_documentation(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        contract = (SKILL / "references" / "agent-contract.md").read_text(encoding="utf-8")
+        usage = (SKILL / "references" / "tool-usage.md").read_text(encoding="utf-8")
+        self.assertIn("references/tool-usage.md", skill)
+        self.assertIn("references/agent-contract.md", skill)
+        self.assertIn("tool-usage.md", contract)
+        self.assertNotIn("--after-plugin", skill)
+        self.assertNotIn("--after-plugin", usage)
+        for command in (
+            "config set --archive-directory",
+            "nexus batch prepare",
+            "install inspect",
+            "install plan",
+            "install apply",
+            "install resume",
+            "archive retry",
+            "root deploy",
+            "profile audit",
+            "backup restore",
+        ):
+            self.assertIn(command, usage)
+        self.assertIn("## Exit handling", usage)
 
     def test_versions_share_project_version(self):
         version = tomllib.loads((ROOT / "pyproject.toml").read_bytes().decode("utf-8"))["project"]["version"]
@@ -37,12 +64,13 @@ class BundleContractTests(unittest.TestCase):
         self.assertNotIn("release/mo2-agent-toolkit/bin", workflow)
         self.assertNotIn("Copy-Item dist/mo2-tool/*", workflow)
 
-    def test_bundle_includes_project_and_vendored_licenses(self):
+    def test_bundle_includes_project_docs_and_vendored_licenses(self):
         build = (ROOT / "scripts" / "build-bundle.ps1").read_text(encoding="utf-8")
         notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
         project_license = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("(Join-Path $Root 'LICENSE')", build)
         self.assertIn("(Join-Path $Stage 'LICENSE')", build)
+        self.assertIn("(Join-Path $Stage 'references\\tool-usage.md')", build)
         self.assertIn("THIRD_PARTY_NOTICES.md", build)
         self.assertIn("third_party\\pyfomod\\LICENSE", build)
         self.assertIn("GNU GENERAL PUBLIC LICENSE", project_license)

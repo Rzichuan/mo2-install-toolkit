@@ -326,6 +326,42 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stderr.options,{"encoding":"utf-8","errors":"replace"})
 
 
+class DocumentedCommandParserTests(unittest.TestCase):
+    def test_primary_tool_guide_command_shapes_parse(self):
+        commands = [
+            ["setup", "--dry-run", "--json"],
+            ["config", "show", "--json"],
+            ["config", "set", "--archive-directory", "C:/MO2/downloads", "--archive-after-install", "true", "--json"],
+            ["auth", "set", "--gui", "--json"],
+            ["auth", "status", "--json"],
+            ["auth", "remove", "--json"],
+            ["doctor", "--json"],
+            ["nexus", "info", "123", "--json"],
+            ["nexus", "deps", "123", "--json"],
+            ["nexus", "download", "123", "456", "--json"],
+            ["nexus", "request", "123", "456", "--no-open-browser", "--no-wait", "--json"],
+            ["nexus", "batch", "prepare", "nexus:123", "--file-id", "456", "--json"],
+            ["nexus", "batch", "status", "session-1", "--json"],
+            ["nexus", "batch", "collect", "session-1", "--json"],
+            ["install", "inspect", "Example.7z", "--json"],
+            ["install", "plan", "Example.7z", "--name", "Example Mod", "--selections", "selections.json", "--modid", "123", "--file-id", "456", "--json"],
+            ["install", "apply", "plan-1", "--yes", "--after-mod", "Base Mod", "--placement-reason", "Patch overwrites base", "--json"],
+            ["install", "resume", "plan-1", "--yes", "--auto-replan", "--modlist-bottom", "--placement-reason", "Reviewed fallback", "--json"],
+            ["archive", "retry", "plan-1", "--json"],
+            ["profile", "audit", "--json"],
+            ["profile", "apply", "Default", "--enable-mod", "Example Mod", "--after-mod", "Base Mod", "--dry-run", "--json"],
+            ["root", "inspect", "Root.7z", "--json"],
+            ["root", "deploy", "Root.7z", "--dry-run", "--json"],
+            ["backup", "list", "--json"],
+            ["backup", "inspect", "backup-1", "--json"],
+            ["backup", "restore", "backup-1", "--yes", "--json"],
+        ]
+        parser = cli.parser()
+        for command in commands:
+            with self.subTest(command=command):
+                parsed = parser.parse_args(command)
+                self.assertIsNotNone(parsed.command)
+
 class NexusDownloadCliRegressionTests(unittest.TestCase):
     def test_standard_download_syntax_does_not_require_mod_id_attribute(self):
         with patch.object(cli, "run_legacy", return_value=0) as run:

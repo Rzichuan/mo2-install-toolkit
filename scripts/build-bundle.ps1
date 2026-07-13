@@ -29,7 +29,7 @@ try {
   $StageBin = Join-Path $Stage 'bin'
   New-Item -ItemType Directory -Path $StageBin | Out-Null
   Get-ChildItem -LiteralPath $ToolDirectory -Force | Copy-Item -Destination $StageBin -Recurse -Force
-  foreach ($Required in @((Join-Path $Stage 'SKILL.md'), (Join-Path $Stage 'references\agent-contract.md'), (Join-Path $Stage 'LICENSE'), (Join-Path $Stage 'THIRD_PARTY_NOTICES.md'), (Join-Path $Stage 'third_party\pyfomod\LICENSE'), (Join-Path $StageBin 'mo2-tool.exe'), (Join-Path $StageBin '_internal'))) {
+  foreach ($Required in @((Join-Path $Stage 'SKILL.md'), (Join-Path $Stage 'references\agent-contract.md'), (Join-Path $Stage 'references\tool-usage.md'), (Join-Path $Stage 'LICENSE'), (Join-Path $Stage 'THIRD_PARTY_NOTICES.md'), (Join-Path $Stage 'third_party\pyfomod\LICENSE'), (Join-Path $StageBin 'mo2-tool.exe'), (Join-Path $StageBin '_internal'))) {
     if (-not (Test-Path -LiteralPath $Required)) { throw "Incomplete bundle; missing: $Required" }
   }
   $Version = & (Join-Path $StageBin 'mo2-tool.exe') --version

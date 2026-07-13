@@ -5,6 +5,7 @@
 - Block C# FOMOD, OMOD, NCC, and explicit executable installers from ordinary automatic installation.
 - Move MO2 archive `.meta` sidecars together with archived downloads.
 - Re-license the project under GPL-3.0-or-later while retaining third-party notices.
+- Add a layered Skill tool guide with complete setup, Nexus, install/update, archive, root, Profile, backup, recovery, and exit-handling recipes.
 
 ## 0.8.1 - 2026-07-13
 
