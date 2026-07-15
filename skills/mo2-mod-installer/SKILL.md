@@ -45,7 +45,20 @@ Never execute C# FOMOD, OMOD, NCC, or explicit setup/install entry points. An or
 - Follow `modlist_context.naming_conventions` and the active Profile's established taxonomy. Reuse an existing category, follow the prevailing localized-description style, and retain a recognizable original title.
 - Keep base mods, patches, addons, framework components, animation packs, appearance families, and other clearly related mods adjacent when overwrite semantics permit.
 - Prefer placement evidence in this order: exact dependency/base relationship; same family/framework; intentional conflict order; closest functional peer in the established category; reviewed fallback separator.
-- `before_mod` and `after_mod` use `modlist.txt` file direction: earlier lines have higher MO2 priority and a lower visible left-pane position. Verify both file-direction and left-pane neighbors from the result.
+- **Placement direction (`--before-mod` / `--after-mod`):** The CLI flags use `modlist.txt` file order. `modlist.txt` line 1 = MO2 left-pane **bottom** = **highest** priority (loaded last, wins conflicts). The file and the UI are exact inverses:
+
+  | modlist.txt line | MO2 left-pane position | Priority |
+  |---|---|---|
+  | 1 (top of file) | **Bottom** of pane | **Highest** (wins) |
+  | ↓ later lines | ↑ higher in pane | ↓ lower |
+  | Last line | **Top** of pane | **Lowest** |
+
+  `--before-mod X` = insert earlier in modlist.txt → **below** X in left pane → **higher** priority than X.
+  `--after-mod X` = insert later in modlist.txt → **above** X in left pane → **lower** priority than X.
+
+  **Dependency rule:** A mod that depends on X must load *after* X → it needs **higher** priority → place it **below** X in the left pane → use `--before-mod X`. Example: *Audio Occlusion depends on Address Library →* `--before-mod "Address Library for SKSE Plugins"`.
+
+  After placement, always verify `final_placement.mo2_left_pane`: the dependent mod must appear as `below_mod` relative to its dependency. If the plan shows the dependency as `below_mod` instead, you used the wrong flag — re-plan with the opposite direction.
 - Do not infer placement from a similar name, Nexus category, or file type alone. A missing or duplicated exact anchor is a hard stop.
 - For this user's fixed fallback, place an ordinary mod after `—————— 其他模组生成 ——————_separator` only when no stronger placement exists. Put a mod inside the generated-output group only when the user explicitly identifies it as generated output.
 
