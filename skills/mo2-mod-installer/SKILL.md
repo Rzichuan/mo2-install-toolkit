@@ -5,13 +5,13 @@ description: Safely inspect, plan, install, update, validate, archive, back up, 
 
 # MO2 Mod Installer
 
-Use the `bin/mo2-tool.exe` shipped inside this loaded Skill Bundle as the only mutation engine. Never edit MO2 profile files, move installed mods, or emulate MO2's virtual file tree directly.
+Use only the absolute `mo2-tool.exe` path returned by the runtime bootstrap as the mutation engine. Never edit MO2 profile files, move installed mods, or emulate MO2's virtual file tree directly.
 
 ## Tool bootstrap and location
 
 - Resolve this `SKILL.md` to an absolute path. Before the first CLI-backed operation in a task, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <skill-directory>\scripts\ensure-runtime.ps1 -Json`.
 - Parse the bootstrap JSON and continue only when it exits `0`, reports `status=ready`, and returns an absolute `tool_path`. Use only that returned `mo2-tool.exe` path for the rest of the task.
-- The bootstrap accepts a complete Bundle beside this Skill, a matching versioned cache, or a matching legacy shared Bundle. Otherwise it downloads the exact runtime pinned by `runtime-manifest.json`, verifies SHA-256 and `--version`, and caches it under `%LOCALAPPDATA%\MO2AgentToolkit\runtimes`.
+- The bootstrap accepts a locally built complete Bundle beside this Skill, a matching versioned runtime cache, or a matching legacy shared Bundle. Otherwise it downloads the pure runtime payload pinned by `runtime-manifest.json`, verifies SHA-256, `runtime.json`, and `--version`, and caches it under `%LOCALAPPDATA%\MO2AgentToolkit\runtimes`. The Release payload is not itself a Skill/plugin.
 - Do not download for a documentation-only answer. Do not modify the manifest, use a `latest` Release, search `dist`, copy an executable by itself, or fall back to another `mo2-tool` on `PATH`.
 - On bootstrap exit `2`, `3`, `4`, or `5`, stop and report its structured errors and actionable cache/network guidance. Never bypass a checksum or version failure.
 - Examples abbreviate the returned absolute executable as `mo2-tool`; substitute `tool_path` when executing them.

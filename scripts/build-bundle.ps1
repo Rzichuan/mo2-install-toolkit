@@ -16,6 +16,11 @@ if (-not (Test-Path -LiteralPath $ToolExe -PathType Leaf)) { throw "Tool executa
 if (-not (Test-Path -LiteralPath $Internal -PathType Container)) { throw "PyInstaller _internal directory not found: $Internal" }
 $Manifest = Get-Content -LiteralPath (Join-Path $SkillSource 'runtime-manifest.json') -Encoding UTF8 -Raw | ConvertFrom-Json
 $ExpectedVersion = [string]$Manifest.tool_version
+$RuntimeMetadata = [ordered]@{
+  schema_version = 1
+  tool_version = $ExpectedVersion
+  platform = [string]$Manifest.platform
+} | ConvertTo-Json
 $OutputParent = Split-Path -Parent $OutputDirectory
 New-Item -ItemType Directory -Path $OutputParent -Force | Out-Null
 $Stage = Join-Path $OutputParent ('.bundle-stage-' + [guid]::NewGuid().ToString('N'))
@@ -31,9 +36,11 @@ try {
   $StageBin = Join-Path $Stage 'bin'
   New-Item -ItemType Directory -Path $StageBin | Out-Null
   Get-ChildItem -LiteralPath $ToolDirectory -Force | Copy-Item -Destination $StageBin -Recurse -Force
+  [IO.File]::WriteAllText((Join-Path $Stage 'runtime.json'), $RuntimeMetadata + "`n", [Text.UTF8Encoding]::new($false))
   foreach ($Required in @(
     (Join-Path $Stage 'SKILL.md'),
     (Join-Path $Stage 'runtime-manifest.json'),
+    (Join-Path $Stage 'runtime.json'),
     (Join-Path $Stage 'scripts\ensure-runtime.ps1'),
     (Join-Path $Stage 'references\agent-contract.md'),
     (Join-Path $Stage 'references\tool-usage.md'),

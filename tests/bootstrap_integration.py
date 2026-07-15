@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,13 +80,19 @@ class BootstrapIntegrationTests(unittest.TestCase):
         path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         return path
 
-    def run_bootstrap(self, cache: Path, *, manifest: Path | None = None) -> subprocess.CompletedProcess[str]:
+    def run_bootstrap(
+        self,
+        cache: Path,
+        *,
+        manifest: Path | None = None,
+        legacy_bundle: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         command = [
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             str(self.skill / "scripts" / "ensure-runtime.ps1"), "-Json",
             "-ManifestPath", str(manifest or self.skill / "runtime-manifest.json"),
             "-CacheRoot", str(cache),
-            "-LegacyBundlePath", str(self.temp / "missing legacy"),
+            "-LegacyBundlePath", str(legacy_bundle or self.temp / "missing legacy"),
             "-AllowInsecureTestUrls",
         ]
         env = dict(os.environ)
@@ -96,6 +103,24 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertTrue(result.stdout.strip(), result.stderr)
         return json.loads(result.stdout.strip().splitlines()[-1])
 
+    def test_release_archive_contains_runtime_only(self) -> None:
+        with zipfile.ZipFile(self.asset) as archive:
+            names = {name.replace("\\", "/").rstrip("/") for name in archive.namelist() if name.rstrip("/")}
+            metadata = json.loads(archive.read("mo2-runtime/runtime.json").decode("utf-8"))
+        self.assertEqual({"mo2-runtime"}, {name.split("/", 1)[0] for name in names})
+        self.assertIn("mo2-runtime/runtime.json", names)
+        self.assertIn("mo2-runtime/bin/mo2-tool.exe", names)
+        self.assertTrue(any(name.startswith("mo2-runtime/bin/_internal/") for name in names))
+        self.assertIn("mo2-runtime/LICENSE", names)
+        self.assertIn("mo2-runtime/THIRD_PARTY_NOTICES.md", names)
+        self.assertTrue(any(name.startswith("mo2-runtime/third_party/") for name in names))
+        self.assertNotIn("mo2-runtime/SKILL.md", names)
+        self.assertNotIn("mo2-runtime/scripts/ensure-runtime.ps1", names)
+        self.assertFalse(any(name.startswith("mo2-runtime/references/") for name in names))
+        self.assertEqual(1, metadata["schema_version"])
+        self.assertEqual(self.base_manifest["tool_version"], metadata["tool_version"])
+        self.assertEqual("win-x64", metadata["platform"])
+
     def test_complete_bundle_is_ready_without_network(self) -> None:
         script = BUNDLE / "scripts" / "ensure-runtime.ps1"
         result = subprocess.run(
@@ -105,6 +130,16 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         payload = self.payload(result)
         self.assertEqual("bundled", payload["cache_source"])
+        self.assertFalse(payload["downloaded"])
+
+    def test_legacy_complete_bundle_without_runtime_metadata_is_accepted(self) -> None:
+        legacy = self.temp / "legacy bundle"
+        shutil.copytree(BUNDLE, legacy)
+        (legacy / "runtime.json").unlink()
+        result = self.run_bootstrap(self.temp / "legacy cache", legacy_bundle=legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+        payload = self.payload(result)
+        self.assertEqual("legacy", payload["cache_source"])
         self.assertFalse(payload["downloaded"])
 
     def test_hash_mismatch_and_http_failure_are_classified(self) -> None:
@@ -129,6 +164,7 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertTrue(cold_payload["downloaded"])
         self.assertEqual("downloaded", cold_payload["cache_source"])
         cold_version_root = cache / self.base_manifest["tool_version"]
+        self.assertTrue((cold_version_root / "mo2-runtime" / "runtime.json").is_file())
         self.assertEqual([], list(cold_version_root.glob(".stage-*")))
 
         concurrent_cache = self.temp / "concurrent cache"
@@ -142,6 +178,7 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertEqual(1, sum(bool(item["downloaded"]) for item in payloads))
         self.assertFalse(stale.exists())
         concurrent_version_root = concurrent_cache / self.base_manifest["tool_version"]
+        self.assertTrue((concurrent_version_root / "mo2-runtime" / "runtime.json").is_file())
         self.assertEqual([], list(concurrent_version_root.glob(".stage-*")))
 
         self.httpd.shutdown()
@@ -154,7 +191,7 @@ class BootstrapIntegrationTests(unittest.TestCase):
 
     def test_exact_runtime_version_is_enforced(self) -> None:
         version = "0.9.1"
-        asset_name = f"mo2-mod-installer-v{version}-win-x64.zip"
+        asset_name = f"mo2-runtime-v{version}-win-x64.zip"
         checksum_name = asset_name + ".sha256"
         shutil.copy2(self.asset, self.release_root / asset_name)
         (self.release_root / checksum_name).write_text(

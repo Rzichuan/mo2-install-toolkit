@@ -68,15 +68,23 @@ class BundleContractTests(unittest.TestCase):
         self.assertEqual(version, manifest["tool_version"])
         self.assertEqual(version, manifest["toolkit_version"])
 
-    def test_release_is_tag_driven_and_packages_the_runtime_bundle(self):
+    def test_release_is_tag_driven_and_packages_runtime_only(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         package = (ROOT / "scripts" / "package-release.ps1").read_text(encoding="utf-8")
         self.assertIn("actions/setup-dotnet@v4", workflow)
         self.assertIn("scripts/package-release.ps1", workflow)
         self.assertIn("github.ref_type == 'tag'", workflow)
         self.assertNotIn("release:\n    types: [published]", workflow)
+        manifest = json.loads((SKILL / "runtime-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual("mo2-runtime", manifest["archive_root"])
+        self.assertEqual(f"mo2-runtime-v{manifest['tool_version']}-win-x64.zip", manifest["asset_name"])
         self.assertIn("checksum_asset_name", package)
         self.assertIn("Compress-Archive", package)
+        self.assertIn("$ToolDirectory", package)
+        self.assertIn("runtime.json", package)
+        self.assertIn("third_party", package)
+        self.assertNotIn("mo2-mod-installer-bundle", package)
+        self.assertNotIn("SKILL.md", package)
 
     def test_bundle_includes_project_docs_and_vendored_licenses(self):
         build = (ROOT / "scripts" / "build-bundle.ps1").read_text(encoding="utf-8")
@@ -84,6 +92,8 @@ class BundleContractTests(unittest.TestCase):
         project_license = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("(Join-Path $Root 'LICENSE')", build)
         self.assertIn("(Join-Path $Stage 'LICENSE')", build)
+        self.assertIn("(Join-Path $Stage 'runtime.json')", build)
+        self.assertIn("schema_version = 1", build)
         self.assertIn("(Join-Path $Stage 'references\\tool-usage.md')", build)
         self.assertIn("THIRD_PARTY_NOTICES.md", build)
         self.assertIn("third_party\\pyfomod\\LICENSE", build)

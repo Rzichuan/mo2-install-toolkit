@@ -25,7 +25,7 @@ jobs:
         run: python -X utf8 -m pip install -e .
       - name: Run unit tests
         run: python -X utf8 -m unittest discover -s tests -p "test_*.py" -v
-      - name: Build complete Windows Bundle
+      - name: Build tool and local compatibility Bundle
         shell: powershell
         run: ./scripts/build.ps1
       - name: Test legacy/offline adapters
@@ -48,7 +48,7 @@ jobs:
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: mo2-mod-installer-${{ runner.arch }}
+          name: mo2-runtime-${{ runner.arch }}
           path: |
             release/*.zip
             release/*.sha256

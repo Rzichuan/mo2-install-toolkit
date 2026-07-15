@@ -5,8 +5,8 @@
 - Make source clones self-bootstrapping through a strictly pinned, SHA-256-verified Windows runtime cache.
 - Add native Codex repository marketplace metadata and a root Claude Skill adapter while retaining one authoritative nested Skill.
 - Make clean-checkout builds self-contained by moving the NPC patcher sidecar into this repository.
-- Publish directly installable, versioned win-x64 Skill Bundles and checksums from tag-driven CI.
-- Preserve the full-Bundle adapter installer as an offline and compatibility path.
+- Publish versioned win-x64 runtime payloads and checksums from tag-driven CI; Release assets are bootstrap dependencies rather than directly installable Skills.
+- Preserve locally built full-Bundle adapter installation as an offline and compatibility path.
 
 - Add lightweight `simple`, `data-folder`, and `fomod` handler reporting without introducing a virtual file tree.
 - Promote a top-level `Data/` directory while preserving root documentation.

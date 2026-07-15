@@ -1,32 +1,71 @@
 [CmdletBinding()] param(
-  [string]$BundlePath,
+  [string]$ToolDirectory,
   [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-if (-not $BundlePath) { $BundlePath = Join-Path $Root 'dist\mo2-mod-installer-bundle' }
+if (-not $ToolDirectory) { $ToolDirectory = Join-Path $Root 'dist\mo2-tool' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $Root 'release' }
-$BundlePath = (Resolve-Path -LiteralPath $BundlePath).Path
+$ToolDirectory = (Resolve-Path -LiteralPath $ToolDirectory).Path
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $Manifest = Get-Content -LiteralPath (Join-Path $Root 'skills\mo2-mod-installer\runtime-manifest.json') -Encoding UTF8 -Raw | ConvertFrom-Json
 $Version = [string]$Manifest.tool_version
+$Platform = [string]$Manifest.platform
+$ArchiveRoot = [string]$Manifest.archive_root
 $AssetName = [string]$Manifest.asset_name
 $ChecksumName = [string]$Manifest.checksum_asset_name
-$Stage = Join-Path ([IO.Path]::GetTempPath()) ('mo2-release-stage-' + [guid]::NewGuid().ToString('N'))
+if ($ArchiveRoot -ne 'mo2-runtime') { throw "Unexpected runtime archive root: $ArchiveRoot" }
+if ($AssetName -ne "mo2-runtime-v$Version-win-x64.zip") { throw "Unexpected runtime asset name: $AssetName" }
+if ($ChecksumName -ne "$AssetName.sha256") { throw "Unexpected checksum asset name: $ChecksumName" }
+$SourceTool = Join-Path $ToolDirectory 'mo2-tool.exe'
+$SourceInternal = Join-Path $ToolDirectory '_internal'
+if (-not (Test-Path -LiteralPath $SourceTool -PathType Leaf)) { throw "Tool executable not found: $SourceTool" }
+if (-not (Test-Path -LiteralPath $SourceInternal -PathType Container)) { throw "PyInstaller _internal directory not found: $SourceInternal" }
+$Stage = Join-Path ([IO.Path]::GetTempPath()) ('mo2-runtime-stage-' + [guid]::NewGuid().ToString('N'))
 try {
-  $StageSkill = Join-Path $Stage ([string]$Manifest.archive_root)
-  New-Item -ItemType Directory -Path $StageSkill -Force | Out-Null
-  Get-ChildItem -LiteralPath $BundlePath -Force | Copy-Item -Destination $StageSkill -Recurse -Force
-  $Tool = Join-Path $StageSkill 'bin\mo2-tool.exe'
+  $StageRuntime = Join-Path $Stage $ArchiveRoot
+  $StageBin = Join-Path $StageRuntime 'bin'
+  New-Item -ItemType Directory -Path $StageBin -Force | Out-Null
+  Get-ChildItem -LiteralPath $ToolDirectory -Force | Copy-Item -Destination $StageBin -Recurse -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'LICENSE') -Destination $StageRuntime -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'THIRD_PARTY_NOTICES.md') -Destination $StageRuntime -Force
+  $ThirdPartyDestination = Join-Path $StageRuntime 'third_party'
+  New-Item -ItemType Directory -Path $ThirdPartyDestination -Force | Out-Null
+  Get-ChildItem -LiteralPath (Join-Path $Root 'third_party') -Force | Copy-Item -Destination $ThirdPartyDestination -Recurse -Force
+  $RuntimeMetadata = [ordered]@{
+    schema_version = 1
+    tool_version = $Version
+    platform = $Platform
+  } | ConvertTo-Json
+  [IO.File]::WriteAllText((Join-Path $StageRuntime 'runtime.json'), $RuntimeMetadata + "`n", [Text.UTF8Encoding]::new($false))
+  foreach ($Required in @(
+    (Join-Path $StageRuntime 'runtime.json'),
+    (Join-Path $StageRuntime 'LICENSE'),
+    (Join-Path $StageRuntime 'THIRD_PARTY_NOTICES.md'),
+    (Join-Path $StageRuntime 'third_party\pyfomod\LICENSE'),
+    (Join-Path $StageRuntime 'third_party\mutagen\LICENSE'),
+    (Join-Path $StageRuntime 'third_party\newtonsoft-json\LICENSE.md'),
+    (Join-Path $StageBin 'mo2-tool.exe'),
+    (Join-Path $StageBin '_internal')
+  )) {
+    if (-not (Test-Path -LiteralPath $Required)) { throw "Incomplete runtime payload; missing: $Required" }
+  }
+  $Tool = Join-Path $StageBin 'mo2-tool.exe'
   $ActualVersion = ((& $Tool --version) | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0 -or $ActualVersion -ne $Version) { throw "Release Bundle version '$ActualVersion' does not match '$Version'." }
+  if ($LASTEXITCODE -ne 0 -or $ActualVersion -ne $Version) { throw "Runtime version '$ActualVersion' does not match '$Version'." }
   New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
   $Zip = Join-Path $OutputDirectory $AssetName
   $Checksum = Join-Path $OutputDirectory $ChecksumName
-  if (Test-Path -LiteralPath $Zip) { Remove-Item -LiteralPath $Zip -Force }
-  if (Test-Path -LiteralPath $Checksum) { Remove-Item -LiteralPath $Checksum -Force }
-  Compress-Archive -LiteralPath $StageSkill -DestinationPath $Zip -CompressionLevel Optimal
-  $Hash = (Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
+  $ObsoleteBundle = Join-Path $OutputDirectory "mo2-mod-installer-v$Version-win-x64.zip"
+  $ObsoleteChecksum = "$ObsoleteBundle.sha256"
+  foreach ($PreviousAsset in @($Zip, $Checksum, $ObsoleteBundle, $ObsoleteChecksum)) {
+    if (Test-Path -LiteralPath $PreviousAsset -PathType Leaf) { Remove-Item -LiteralPath $PreviousAsset -Force }
+  }
+  Compress-Archive -LiteralPath $StageRuntime -DestinationPath $Zip -CompressionLevel Optimal
+  $Stream = [IO.File]::OpenRead($Zip)
+  $Sha256 = [Security.Cryptography.SHA256]::Create()
+  try { $Hash = ([BitConverter]::ToString($Sha256.ComputeHash($Stream))).Replace('-', '').ToLowerInvariant() }
+  finally { $Sha256.Dispose(); $Stream.Dispose() }
   [IO.File]::WriteAllText($Checksum, "$Hash  $AssetName`n", [Text.Encoding]::ASCII)
   [pscustomobject]@{ version=$Version; asset=$Zip; checksum=$Checksum; sha256=$Hash }
 } finally {

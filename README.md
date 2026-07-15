@@ -1,6 +1,6 @@
 # MO2 Agent Toolkit
 
-A Windows x64, agent-neutral toolkit for safe Mod Organizer 2 operations. Public releases contain a standalone executable; users do not need Python.
+A Windows x64, agent-neutral toolkit for safe Mod Organizer 2 operations. The repository provides the Skill/plugin, while GitHub Releases provide its pinned runtime dependency; users do not need Python.
 
 ## Quick start
 
@@ -28,10 +28,10 @@ The root `SKILL.md` forwards Claude to the authoritative nested Skill. Start a n
 
 ### First use
 
-The source clone intentionally contains no 100 MiB runtime. On the first CLI-backed request, the Skill downloads the pinned `v0.9.0` Windows x64 Bundle (about 45 MiB compressed), verifies its SHA-256 and exact executable version, and caches it under:
+The source clone intentionally contains no 100 MiB runtime. On the first CLI-backed request, the Skill downloads the pinned `v0.9.0` Windows x64 runtime payload (about 45 MiB compressed), verifies its SHA-256, metadata, and exact executable version, and caches it under:
 
 ```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0\mo2-mod-installer
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0\mo2-runtime
 ```
 
 No Python, .NET SDK, local build, `PATH` edit, or manual EXE copy is required. A valid cache works offline. MO2 instance/Profile selection and an optional Nexus API key are configured through the existing `setup`, `auth`, and `doctor` commands when needed.
@@ -45,16 +45,24 @@ $Tool = $Ready.tool_path
 & $Tool doctor --json
 ```
 
-### Full Bundle and offline installation
+### Runtime Release and offline transfer
 
-The GitHub Release asset `mo2-mod-installer-v0.9.0-win-x64.zip` is a complete, directly installable Skill. Extract it so the resulting `mo2-mod-installer` folder is under the agent's Skill directory; its bundled runtime is used without a network request. Verify the adjacent `.sha256` before distributing it offline.
+The GitHub Release asset `mo2-runtime-v0.9.0-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should install through the Codex marketplace or clone the repository and should not download the Release asset manually.
 
-The repository's `scripts\install-adapters.ps1 -BundlePath <extracted-mo2-mod-installer> -Target Both` remains available for existing installations that want one shared Bundle plus Codex/Claude junctions. It is a compatibility path, not required for normal clone-based installation.
+For a machine that must remain offline, first install or clone the matching tagged Skill/plugin on that machine. On another machine, download the runtime ZIP and adjacent `.sha256`, verify the checksum, then extract the archive into the version directory:
+
+```text
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0
+```
+
+The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
+
+The repository's `scripts\build-bundle.ps1` can still create a local complete Bundle under `dist\mo2-mod-installer-bundle`. `scripts\install-adapters.ps1 -BundlePath <local-complete-bundle> -Target Both` remains available for existing installations that want one shared Bundle plus Codex/Claude junctions. This locally built compatibility Bundle is not a GitHub Release asset and is not required for normal clone-based installation.
 
 ### Upgrade, troubleshooting, and removal
 
 - Upgrade by installing or cloning a newer tagged Skill/plugin. Each tag downloads only its matching runtime; `latest` is never used, and old caches remain available for rollback.
-- Network/proxy failures return bootstrap exit `4`; configure the Windows/PowerShell proxy or install the complete Release Bundle. Hash or version failures return exit `3` and are never bypassed.
+- Network/proxy failures return bootstrap exit `4`; configure the Windows/PowerShell proxy or transfer the matching verified runtime into the exact versioned cache path described above. Hash, metadata, or version failures return exit `3` and are never bypassed.
 - Remove the cloned Skill/plugin through the corresponding agent. Remove an obsolete runtime only by deleting its exact version directory under `%LOCALAPPDATA%\MO2AgentToolkit\runtimes` after confirming no installed Skill still references it.
 - Configuration and DPAPI credentials are separate under `%LOCALAPPDATA%\MO2AgentToolkit` and are not removed with a runtime cache.
 
@@ -157,7 +165,7 @@ Selections files are strict JSON objects whose string group IDs map to arrays of
 
 ## NPC FaceGen conflict workflow
 
-The bundled Mutagen sidecar is exposed through a stable, agent-safe workflow. The following uses `mo2-tool` as shorthand for the absolute Bundle executable described above:
+The bundled Mutagen sidecar is exposed through a stable, agent-safe workflow. The following uses `mo2-tool` as shorthand for the absolute bootstrapped runtime executable described above:
 
 ```text
 mo2-tool npc scan --json

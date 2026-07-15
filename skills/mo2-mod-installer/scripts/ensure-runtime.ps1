@@ -56,21 +56,40 @@ function Test-ChildPath {
 }
 
 function Test-ExpectedRuntime {
-  param([string]$Root, [string]$ExpectedVersion)
+  param(
+    [string]$Root,
+    [string]$ExpectedVersion,
+    [switch]$AllowMissingMetadata
+  )
   if (-not $Root -or -not (Test-Path -LiteralPath $Root -PathType Container)) {
     return [pscustomobject]@{ Valid = $false; Path = ''; Version = ''; Reason = 'directory_missing' }
   }
   $exe = Join-Path $Root 'bin\mo2-tool.exe'
   $internal = Join-Path $Root 'bin\_internal'
-  $skill = Join-Path $Root 'SKILL.md'
+  $metadataPath = Join-Path $Root 'runtime.json'
   if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
     return [pscustomobject]@{ Valid = $false; Path = $exe; Version = ''; Reason = 'executable_missing' }
   }
   if (-not (Test-Path -LiteralPath $internal -PathType Container)) {
     return [pscustomobject]@{ Valid = $false; Path = $exe; Version = ''; Reason = 'internal_missing' }
   }
-  if (-not (Test-Path -LiteralPath $skill -PathType Leaf)) {
-    return [pscustomobject]@{ Valid = $false; Path = $exe; Version = ''; Reason = 'skill_missing' }
+  foreach ($requiredFile in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Root $requiredFile) -PathType Leaf)) {
+      return [pscustomobject]@{ Valid = $false; Path = $exe; Version = ''; Reason = 'license_metadata_missing' }
+    }
+  }
+  if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
+    try {
+      $metadata = [IO.File]::ReadAllText($metadataPath, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+      $metadataProperties = @($metadata.PSObject.Properties.Name)
+      if ($metadataProperties -notcontains 'schema_version' -or [int]$metadata.schema_version -ne 1) { throw 'schema_version' }
+      if ($metadataProperties -notcontains 'tool_version' -or [string]$metadata.tool_version -ne $ExpectedVersion) { throw 'tool_version' }
+      if ($metadataProperties -notcontains 'platform' -or [string]$metadata.platform -ne 'win-x64') { throw 'platform' }
+    } catch {
+      return [pscustomobject]@{ Valid = $false; Path = $exe; Version = ''; Reason = 'runtime_metadata_invalid' }
+    }
+  } elseif (-not $AllowMissingMetadata) {
+    return [pscustomobject]@{ Valid = $false; Path = $exe; Version = ''; Reason = 'runtime_metadata_missing' }
   }
   try {
     $versionLines = @(& $exe --version 2>$null)
@@ -97,9 +116,9 @@ function Assert-Manifest {
   if ([string]$Manifest.platform -ne 'win-x64') { throw 'This Skill only supports the win-x64 runtime.' }
   if ([string]$Manifest.release_tag -ne ('v' + [string]$Manifest.tool_version)) { throw 'release_tag must exactly match tool_version.' }
   if ([string]$Manifest.toolkit_version -ne [string]$Manifest.tool_version) { throw 'toolkit_version must exactly match tool_version.' }
-  if ([string]$Manifest.asset_name -ne ("mo2-mod-installer-v{0}-win-x64.zip" -f [string]$Manifest.tool_version)) { throw 'Unexpected runtime asset name.' }
+  if ([string]$Manifest.asset_name -ne ("mo2-runtime-v{0}-win-x64.zip" -f [string]$Manifest.tool_version)) { throw 'Unexpected runtime asset name.' }
   if ([string]$Manifest.checksum_asset_name -ne ([string]$Manifest.asset_name + '.sha256')) { throw 'Unexpected checksum asset name.' }
-  if ([string]$Manifest.archive_root -ne 'mo2-mod-installer') { throw 'Unexpected runtime archive root.' }
+  if ([string]$Manifest.archive_root -ne 'mo2-runtime') { throw 'Unexpected runtime archive root.' }
   foreach ($urlName in @('asset_url','checksum_url')) {
     $uri = $null
     if (-not [Uri]::TryCreate([string]$Manifest.$urlName, [UriKind]::Absolute, [ref]$uri)) { throw "Invalid $urlName." }
@@ -183,14 +202,14 @@ try {
   if ($bundled.Reason -notin @('directory_missing','executable_missing')) { $script:Warnings.Add("Bundled runtime was ignored: $($bundled.Reason).") }
 
   $versionRoot = Join-Path $CacheRoot $expectedVersion
-  $targetRoot = Join-Path $versionRoot 'mo2-mod-installer'
+  $targetRoot = Join-Path $versionRoot ([string]$manifest.archive_root)
   if (-not (Test-ChildPath $targetRoot $CacheRoot)) { Stop-Bootstrap 2 'Computed runtime path escaped the cache root.' $expectedVersion }
 
   $cached = Test-ExpectedRuntime $targetRoot $expectedVersion
   if ($cached.Valid) { Write-Outcome 'ready' 0 $expectedVersion $cached.Path $false 'versioned' }
   if ($cached.Reason -notin @('directory_missing','executable_missing')) { $script:Warnings.Add("Cached runtime requires repair: $($cached.Reason).") }
 
-  $legacy = Test-ExpectedRuntime $LegacyBundlePath $expectedVersion
+  $legacy = Test-ExpectedRuntime -Root $LegacyBundlePath -ExpectedVersion $expectedVersion -AllowMissingMetadata
   if ($legacy.Valid) {
     $script:Warnings.Add('Using a matching legacy shared Skill Bundle; it can be replaced by the versioned cache on a future cold start.')
     Write-Outcome 'ready' 0 $expectedVersion $legacy.Path $false 'legacy'
