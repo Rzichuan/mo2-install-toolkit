@@ -1,6 +1,6 @@
 {
   "name": "mo2-agent-toolkit",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Agent-neutral safety-first MO2 installation toolkit",
   "author": {
     "name": "MO2 Agent Toolkit contributors"
@@ -16,7 +16,7 @@
   "interface": {
     "displayName": "MO2 Agent Toolkit",
     "shortDescription": "Safely manage Skyrim mods in MO2",
-    "longDescription": "Plan, install, update, audit, back up, and restore Mod Organizer 2 mods through a standalone Windows tool.",
+    "longDescription": "Plan, install, update, audit, back up, and restore Mod Organizer 2 mods through an automatically bootstrapped, version-pinned Windows tool.",
     "developerName": "MO2 Agent Toolkit contributors",
     "category": "Developer Tools",
     "capabilities": [

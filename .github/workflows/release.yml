@@ -1,45 +1,70 @@
 name: test-and-release
+
 on:
   push:
   pull_request:
   workflow_dispatch:
-  release:
-    types: [published]
+
 permissions:
   contents: write
+
 jobs:
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -X utf8 -m pip install -e .
-      - run: python -X utf8 -m unittest discover -s tests -v
-      - run: python -X utf8 -m pip install -r requirements-build.txt
-      - shell: powershell
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install project
+        run: python -X utf8 -m pip install -e .
+      - name: Run unit tests
+        run: python -X utf8 -m unittest discover -s tests -p "test_*.py" -v
+      - name: Build complete Windows Bundle
+        shell: powershell
         run: ./scripts/build.ps1
-      - shell: powershell
+      - name: Test legacy/offline adapters
+        shell: powershell
         run: ./scripts/test-adapters.ps1
-      - shell: powershell
+      - name: Package pinned runtime asset
+        shell: powershell
+        run: ./scripts/package-release.ps1
+      - name: Test bootstrap and release asset
+        run: python -X utf8 tests/bootstrap_integration.py
+      - name: Validate tag and distribution versions
+        shell: powershell
         run: |
-          $Version = python -X utf8 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
-          $ReleaseRoot = 'release/mo2-agent-toolkit'
-          New-Item -ItemType Directory -Force "$ReleaseRoot/skill-bundle" | Out-Null
-          Copy-Item dist/mo2-mod-installer-bundle "$ReleaseRoot/skill-bundle/mo2-mod-installer" -Recurse
-          Copy-Item .codex-plugin,skills,scripts,config,assets -Destination $ReleaseRoot -Recurse
-          Copy-Item AGENTS.md,README.md,LICENSE,CHANGELOG.md,THIRD_PARTY_NOTICES.md -Destination $ReleaseRoot
-          $Zip = "release/mo2-agent-toolkit-v$Version-win-x64.zip"
-          Compress-Archive $ReleaseRoot $Zip
-          (Get-FileHash $Zip -Algorithm SHA256).Hash + "  " + (Split-Path $Zip -Leaf) | Set-Content release/SHA256SUMS.txt -Encoding ascii
+          $Manifest = Get-Content skills/mo2-mod-installer/runtime-manifest.json -Encoding UTF8 -Raw | ConvertFrom-Json
+          $ExpectedTag = 'v' + [string]$Manifest.tool_version
+          $ProjectVersion = python -X utf8 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if ($ProjectVersion.Trim() -ne [string]$Manifest.tool_version) { throw 'Project and runtime versions differ.' }
+          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -ne $ExpectedTag) {
+            throw "Tag '${{ github.ref_name }}' must equal '$ExpectedTag'."
+          }
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-x64
-          path: release/*
-      - if: github.event_name == 'release'
+          name: mo2-mod-installer-${{ runner.arch }}
+          path: |
+            release/*.zip
+            release/*.sha256
+          if-no-files-found: error
+      - name: Create draft GitHub Release with assets
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
+          generate_release_notes: true
           files: |
             release/*.zip
-            release/SHA256SUMS.txt
+            release/*.sha256
+      - name: Publish validated GitHub Release
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false --latest

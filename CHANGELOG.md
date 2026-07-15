@@ -1,5 +1,13 @@
 ## Unreleased
 
+## 0.9.0 - 2026-07-16
+
+- Make source clones self-bootstrapping through a strictly pinned, SHA-256-verified Windows runtime cache.
+- Add native Codex repository marketplace metadata and a root Claude Skill adapter while retaining one authoritative nested Skill.
+- Make clean-checkout builds self-contained by moving the NPC patcher sidecar into this repository.
+- Publish directly installable, versioned win-x64 Skill Bundles and checksums from tag-driven CI.
+- Preserve the full-Bundle adapter installer as an offline and compatibility path.
+
 - Add lightweight `simple`, `data-folder`, and `fomod` handler reporting without introducing a virtual file tree.
 - Promote a top-level `Data/` directory while preserving root documentation.
 - Block C# FOMOD, OMOD, NCC, and explicit executable installers from ordinary automatic installation.

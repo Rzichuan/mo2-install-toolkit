@@ -4,18 +4,64 @@ A Windows x64, agent-neutral toolkit for safe Mod Organizer 2 operations. Public
 
 ## Quick start
 
-1. Download and extract the Windows release ZIP.
-2. Install the self-contained Skill Bundle with `scripts\install-adapters.ps1 -Target Both`. The script installs one shared copy under `%LOCALAPPDATA%\MO2AgentToolkit\skill-bundles` and creates Claude/Codex Skill junctions.
-3. Set `$Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\mo2-tool.exe"` and run `& $Tool setup --json`. If multiple instances/profiles are returned, rerun with `--instance` and `--profile`.
-4. Optionally store a Nexus key with `& $Tool auth set --gui --json`; the console fallback is `auth set --console --json`.
-5. Verify with `& $Tool doctor --json`.
+### Codex plugin marketplace
 
-The executable and its PyInstaller `_internal` runtime are part of the Skill Bundle. Do not copy `mo2-tool.exe` alone, invoke a current-directory `bin`, or depend on `PATH`.
+Install the repository at the version that matches its runtime:
+
+```powershell
+codex plugin marketplace add Rzichuan/mo2-install-toolkit --ref v0.9.0
+codex plugin add mo2-agent-toolkit@mo2-install-toolkit
+```
+
+Alternatively, install **MO2 Agent Toolkit** from the Codex/ChatGPT plugin directory after adding the marketplace. Restart or start a new task, then ask for an MO2 operation; Codex loads the nested `mo2-mod-installer` Skill automatically. If you already cloned the repository locally, pass that repository path to `codex plugin marketplace add` instead.
+
+### Claude direct clone
+
+Clone the pinned tag directly into Claude's Skill directory:
+
+```powershell
+New-Item -ItemType Directory -Path "$HOME\.claude\skills" -Force | Out-Null
+git clone --branch v0.9.0 --depth 1 https://github.com/Rzichuan/mo2-install-toolkit.git "$HOME\.claude\skills\mo2-mod-installer"
+```
+
+The root `SKILL.md` forwards Claude to the authoritative nested Skill. Start a new Claude task after cloning.
+
+### First use
+
+The source clone intentionally contains no 100 MiB runtime. On the first CLI-backed request, the Skill downloads the pinned `v0.9.0` Windows x64 Bundle (about 45 MiB compressed), verifies its SHA-256 and exact executable version, and caches it under:
+
+```text
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0\mo2-mod-installer
+```
+
+No Python, .NET SDK, local build, `PATH` edit, or manual EXE copy is required. A valid cache works offline. MO2 instance/Profile selection and an optional Nexus API key are configured through the existing `setup`, `auth`, and `doctor` commands when needed.
+
+For a manual source-checkout smoke test:
+
+```powershell
+$Ready = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\skills\mo2-mod-installer\scripts\ensure-runtime.ps1 -Json | ConvertFrom-Json
+if ($Ready.status -ne 'ready') { throw ($Ready.errors -join '; ') }
+$Tool = $Ready.tool_path
+& $Tool doctor --json
+```
+
+### Full Bundle and offline installation
+
+The GitHub Release asset `mo2-mod-installer-v0.9.0-win-x64.zip` is a complete, directly installable Skill. Extract it so the resulting `mo2-mod-installer` folder is under the agent's Skill directory; its bundled runtime is used without a network request. Verify the adjacent `.sha256` before distributing it offline.
+
+The repository's `scripts\install-adapters.ps1 -BundlePath <extracted-mo2-mod-installer> -Target Both` remains available for existing installations that want one shared Bundle plus Codex/Claude junctions. It is a compatibility path, not required for normal clone-based installation.
+
+### Upgrade, troubleshooting, and removal
+
+- Upgrade by installing or cloning a newer tagged Skill/plugin. Each tag downloads only its matching runtime; `latest` is never used, and old caches remain available for rollback.
+- Network/proxy failures return bootstrap exit `4`; configure the Windows/PowerShell proxy or install the complete Release Bundle. Hash or version failures return exit `3` and are never bypassed.
+- Remove the cloned Skill/plugin through the corresponding agent. Remove an obsolete runtime only by deleting its exact version directory under `%LOCALAPPDATA%\MO2AgentToolkit\runtimes` after confirming no installed Skill still references it.
+- Configuration and DPAPI credentials are separate under `%LOCALAPPDATA%\MO2AgentToolkit` and are not removed with a runtime cache.
 
 ## Safe installation
 
 ```powershell
-$Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\mo2-tool.exe"
+# $Tool is the absolute path returned by the Skill bootstrap.
 & $Tool plan nexus:12345 --json
 & $Tool install inspect C:\Downloads\mod.7z --json
 & $Tool install plan C:\Downloads\mod.7z --name "[分类] 中文用途——Recognizable Mod Title" --modid 12345 --file-id 67890 --json
@@ -38,7 +84,7 @@ For Nexus archives, always pass `--modid` and `--file-id` together when planning
 A free Nexus API key is sufficient for metadata lookup; Premium is not required. When direct API download is unavailable, use the official browser flow:
 
 ```powershell
-$Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\mo2-tool.exe"
+# $Tool is the absolute path returned by the Skill bootstrap.
 & $Tool nexus request 175506 734778 --json
 ```
 
@@ -56,7 +102,7 @@ Archive inspection, Nexus verification, dry-run, and installation results includ
 Do not pass game-root packages to `install`. Configure the real folder containing `SkyrimSE.exe`, then use the dedicated review-and-deploy workflow:
 
 ```powershell
-$Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\mo2-tool.exe"
+# $Tool is the absolute path returned by the Skill bootstrap.
 & $Tool setup --instance C:\MO2 --profile Default --game "C:\SteamLibrary\steamapps\common\Skyrim Special Edition" --json
 & $Tool root inspect C:\Downloads\skse.zip --json
 & $Tool root deploy C:\Downloads\skse.zip --dry-run --json
@@ -68,11 +114,19 @@ Only recognized SKSE and Engine Fixes root packages are accepted. The command ve
 
 ## Development
 
+A clean Windows checkout requires Python 3.11+ and the .NET 8 SDK only for development builds:
+
 ```powershell
-python -X utf8 -m unittest discover -s tests -v
+python -X utf8 -m pip install -e .
+python -X utf8 -m unittest discover -s tests -p "test_*.py" -v
 python -X utf8 -m mo2_agent_toolkit --version
-scripts\build.ps1
+.\scripts\build.ps1
+.\scripts\test-adapters.ps1
+.\scripts\package-release.ps1
+python -X utf8 tests\bootstrap_integration.py
 ```
+
+The build uses the in-repository `sidecars\npc-agent-patcher` project. Release tags must exactly match the versions in `pyproject.toml`, the plugin manifest, Python package, and runtime manifest.
 
 The Nexus key is validated online before saving and never appears in JSON output, command arguments, or configuration files. Configuration and DPAPI-protected credentials live under `%LOCALAPPDATA%\MO2AgentToolkit`, outside the release directory. Do not publish `.env`, secrets, caches, logs, or local paths.
 
@@ -81,7 +135,7 @@ The Nexus key is validated online before saving and never appears in JSON output
 The preferred non-Premium flow is session based:
 
 ```powershell
-$Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\mo2-tool.exe"
+# $Tool is the absolute path returned by the Skill bootstrap.
 & $Tool config show --json
 & $Tool nexus batch prepare nexus:184173 --json
 # If optional dependencies are returned, confirm them with the user, then rerun with:
@@ -90,7 +144,7 @@ $Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\skill-bundles\mo2-mod-installer\bin\m
 & $Tool install inspect "C:\Users\User\Downloads\mod.zip" --json
 & $Tool install plan "C:\Users\User\Downloads\mod.zip" --selections selections.json --modid 184173 --file-id 123456 --json
 # Select one exact placement from modlist_context; after explicit confirmation:
-& $Tool install apply <plan-id> --yes --after-mod "<exact mod or separator>" --json
+& $Tool install apply <plan-id> --yes --after-mod "<exact mod or separator>" --placement-reason "<relationship and overwrite intent>" --json
 ```
 
 ### FOMOD engine

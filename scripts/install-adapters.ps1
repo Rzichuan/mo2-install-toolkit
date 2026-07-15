@@ -9,6 +9,7 @@ $Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 if (-not $LocalAppDataRoot) { throw 'LOCALAPPDATA is unavailable; pass -LocalAppDataRoot explicitly.' }
 if (-not $BundlePath) {
   $Candidates = @(
+    (Join-Path $Root 'mo2-mod-installer'),
     (Join-Path $Root 'skill-bundle\mo2-mod-installer'),
     (Join-Path $Root 'dist\mo2-mod-installer-bundle')
   )
@@ -44,11 +45,13 @@ try {
   New-Item -ItemType Directory -Path $Stage | Out-Null
   Get-ChildItem -LiteralPath $BundlePath -Force | Copy-Item -Destination $Stage -Recurse -Force
   $StageExe = Join-Path $Stage 'bin\mo2-tool.exe'
-  foreach ($Required in @((Join-Path $Stage 'SKILL.md'), (Join-Path $Stage 'references\agent-contract.md'), $StageExe, (Join-Path $Stage 'bin\_internal'))) {
+  $RuntimeManifest = Join-Path $Stage 'runtime-manifest.json'
+  foreach ($Required in @((Join-Path $Stage 'SKILL.md'), $RuntimeManifest, (Join-Path $Stage 'scripts\ensure-runtime.ps1'), (Join-Path $Stage 'references\agent-contract.md'), $StageExe, (Join-Path $Stage 'bin\_internal'))) {
     if (-not (Test-Path -LiteralPath $Required)) { throw "Incomplete bundle; missing: $Required" }
   }
-  $Version = & $StageExe --version
-  if ($LASTEXITCODE -ne 0 -or -not $Version) { throw 'Staged bundle executable smoke test failed' }
+  $ExpectedVersion = [string]((Get-Content -LiteralPath $RuntimeManifest -Encoding UTF8 -Raw | ConvertFrom-Json).tool_version)
+  $Version = ((& $StageExe --version) | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $Version -ne $ExpectedVersion) { throw "Staged bundle version '$Version' does not match manifest '$ExpectedVersion'." }
 
   if (-not $PSCmdlet.ShouldProcess($StableBundle, 'Install shared MO2 Skill Bundle and adapter junctions')) { return }
   $MutationStarted = $true

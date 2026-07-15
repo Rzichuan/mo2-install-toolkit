@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "toolkit_version": "0.9.0",
+  "tool_version": "0.9.0",
+  "platform": "win-x64",
+  "release_tag": "v0.9.0",
+  "asset_name": "mo2-mod-installer-v0.9.0-win-x64.zip",
+  "checksum_asset_name": "mo2-mod-installer-v0.9.0-win-x64.zip.sha256",
+  "asset_url": "https://github.com/Rzichuan/mo2-install-toolkit/releases/download/v0.9.0/mo2-mod-installer-v0.9.0-win-x64.zip",
+  "checksum_url": "https://github.com/Rzichuan/mo2-install-toolkit/releases/download/v0.9.0/mo2-mod-installer-v0.9.0-win-x64.zip.sha256",
+  "archive_root": "mo2-mod-installer"
+}

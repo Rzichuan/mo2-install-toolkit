@@ -13,3 +13,6 @@ htmlcov/
 mo2-tool.spec
 _agent_toolkit_backups/
 release/
+
+sidecars/**/bin/
+sidecars/**/obj/

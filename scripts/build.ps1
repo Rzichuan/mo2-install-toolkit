@@ -1,13 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$Python = (Get-Command python).Source
+$Python = (Get-Command python -ErrorAction Stop).Source
 & $Python -X utf8 -m pip install -r (Join-Path $Root 'requirements-build.txt')
 if ($LASTEXITCODE -ne 0) { throw "Build dependency installation failed with exit code $LASTEXITCODE" }
-$PatcherProject = (Resolve-Path -LiteralPath (Join-Path $Root '..\npc-agent-patcher\NpcAgentPatcher.csproj')).Path
-$Dotnet = if (Test-Path -LiteralPath 'C:\Modding\Tools\dotnet-sdk\dotnet.exe') { 'C:\Modding\Tools\dotnet-sdk\dotnet.exe' } else { (Get-Command dotnet).Source }
+$PatcherProject = (Resolve-Path -LiteralPath (Join-Path $Root 'sidecars\npc-agent-patcher\NpcAgentPatcher.csproj')).Path
+$Dotnet = if (Test-Path -LiteralPath 'C:\Modding\Tools\dotnet-sdk\dotnet.exe') { 'C:\Modding\Tools\dotnet-sdk\dotnet.exe' } else { (Get-Command dotnet -ErrorAction Stop).Source }
 & $Dotnet publish $PatcherProject -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 if ($LASTEXITCODE -ne 0) { throw "NPC sidecar publish failed with exit code $LASTEXITCODE" }
-$Patcher = (Resolve-Path -LiteralPath (Join-Path $Root '..\npc-agent-patcher\bin\Release\net8.0\win-x64\publish\NpcAgentPatcher.exe')).Path
+$Patcher = (Resolve-Path -LiteralPath (Join-Path $Root 'sidecars\npc-agent-patcher\bin\Release\net8.0\win-x64\publish\NpcAgentPatcher.exe')).Path
 & $Python -X utf8 -m PyInstaller --noconfirm --clean --onedir --name mo2-tool `
   --paths (Join-Path $Root 'src') `
   --add-data "$(Join-Path $Root 'src\mo2_agent_toolkit\legacy');mo2_agent_toolkit\legacy" `

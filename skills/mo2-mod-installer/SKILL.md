@@ -1,19 +1,20 @@
 ---
 name: mo2-mod-installer
-description: Safely inspect, plan, install, update, validate, archive, back up, or restore Skyrim SE/AE mods in Mod Organizer 2 with the bundled mo2-tool CLI.
+description: Safely inspect, plan, install, update, validate, archive, back up, or restore Skyrim SE/AE mods in Mod Organizer 2 with a version-pinned mo2-tool runtime that bootstraps automatically.
 ---
 
 # MO2 Mod Installer
 
 Use the `bin/mo2-tool.exe` shipped inside this loaded Skill Bundle as the only mutation engine. Never edit MO2 profile files, move installed mods, or emulate MO2's virtual file tree directly.
 
-## Tool location
+## Tool bootstrap and location
 
-- `bin` is relative to the directory containing this `SKILL.md`, never to the shell's current working directory.
-- Claude Code must invoke `$HOME/.claude/skills/mo2-mod-installer/bin/mo2-tool.exe`; Codex must invoke `$HOME/.codex/skills/mo2-mod-installer/bin/mo2-tool.exe`. Resolve the full absolute path once and keep using that executable.
-- On Windows include `.exe`. Never call `bin/mo2-tool`, search a source checkout's `dist`, copy the executable, or fall back to another `mo2-tool` on `PATH`.
-- Require both `bin/mo2-tool.exe` and `bin/_internal`. If either is missing, stop and report a damaged Bundle.
-- Examples abbreviate the resolved executable as `mo2-tool`. Substitute the absolute Skill path when executing them.
+- Resolve this `SKILL.md` to an absolute path. Before the first CLI-backed operation in a task, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <skill-directory>\scripts\ensure-runtime.ps1 -Json`.
+- Parse the bootstrap JSON and continue only when it exits `0`, reports `status=ready`, and returns an absolute `tool_path`. Use only that returned `mo2-tool.exe` path for the rest of the task.
+- The bootstrap accepts a complete Bundle beside this Skill, a matching versioned cache, or a matching legacy shared Bundle. Otherwise it downloads the exact runtime pinned by `runtime-manifest.json`, verifies SHA-256 and `--version`, and caches it under `%LOCALAPPDATA%\MO2AgentToolkit\runtimes`.
+- Do not download for a documentation-only answer. Do not modify the manifest, use a `latest` Release, search `dist`, copy an executable by itself, or fall back to another `mo2-tool` on `PATH`.
+- On bootstrap exit `2`, `3`, `4`, or `5`, stop and report its structured errors and actionable cache/network guidance. Never bypass a checksum or version failure.
+- Examples abbreviate the returned absolute executable as `mo2-tool`; substitute `tool_path` when executing them.
 
 ## Canonical installation workflow
 
