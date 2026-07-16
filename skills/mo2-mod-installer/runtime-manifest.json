@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "toolkit_version": "0.10.6",
-  "tool_version": "0.10.6",
+  "toolkit_version": "0.10.7",
+  "tool_version": "0.10.7",
   "platform": "win-x64",
-  "release_tag": "v0.10.6",
-  "asset_name": "mo2-runtime-v0.10.6-win-x64.zip",
-  "checksum_asset_name": "mo2-runtime-v0.10.6-win-x64.zip.sha256",
-  "asset_url": "https://github.com/Rzichuan/mo2-install-toolkit/releases/download/v0.10.6/mo2-runtime-v0.10.6-win-x64.zip",
-  "checksum_url": "https://github.com/Rzichuan/mo2-install-toolkit/releases/download/v0.10.6/mo2-runtime-v0.10.6-win-x64.zip.sha256",
+  "release_tag": "v0.10.7",
+  "asset_name": "mo2-runtime-v0.10.7-win-x64.zip",
+  "checksum_asset_name": "mo2-runtime-v0.10.7-win-x64.zip.sha256",
+  "asset_url": "https://github.com/Rzichuan/mo2-install-toolkit/releases/download/v0.10.7/mo2-runtime-v0.10.7-win-x64.zip",
+  "checksum_url": "https://github.com/Rzichuan/mo2-install-toolkit/releases/download/v0.10.7/mo2-runtime-v0.10.7-win-x64.zip.sha256",
   "archive_root": "mo2-runtime"
 }

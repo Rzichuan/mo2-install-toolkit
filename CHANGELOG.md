@@ -1,5 +1,9 @@
 ## Unreleased
 
+## 0.10.7 - 2026-07-17
+
+- Read GUI password-edit values through the control message API and normalize browser copy artifacts so GUI validation uses the same key as console validation.
+
 ## 0.10.6 - 2026-07-17
 
 - Improve Nexus API-key validation errors by distinguishing HTTP 401 invalid credentials from HTTP 403 access/network refusals.

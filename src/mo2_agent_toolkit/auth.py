@@ -65,10 +65,20 @@ def dpapi_unprotect(data: bytes) -> bytes:
 
 
 def normalize_key(value: str) -> str:
-    key = value.strip()
+    # Browser copy operations can add a BOM or zero-width marker around the
+    # value. Remove only those edge artifacts; never silently remove an
+    # internal character from a credential.
+    key = value.strip().strip("\ufeff\u200b\u200c\u200d\u2060").strip()
     if not key:
         raise AuthError("Nexus API key cannot be empty", 2, "invalid_input")
-    if any(ch.isspace() for ch in key) or len(key) < 16 or len(key) > 256:
+    invisible = "\ufeff\u200b\u200c\u200d\u2060"
+    if any(ch.isspace() or ch in invisible for ch in key):
+        raise AuthError(
+            "Nexus API key contains whitespace or invisible characters; paste only the ASCII Personal API Key",
+            2,
+            "invalid_input",
+        )
+    if not key.isascii() or len(key) < 16 or len(key) > 256:
         raise AuthError("Nexus API key format is invalid", 2, "invalid_input")
     return key
 

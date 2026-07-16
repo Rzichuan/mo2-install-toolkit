@@ -15,6 +15,14 @@ import mo2_agent_toolkit.auth_gui as auth_gui
 
 
 class AuthTests(unittest.TestCase):
+    def test_normalize_key_removes_only_edge_copy_artifacts(self):
+        key = "\ufeff" + "a" * 32 + "\u200b"
+        self.assertEqual(auth.normalize_key(key), "a" * 32)
+        with self.assertRaises(auth.AuthError) as caught:
+            auth.normalize_key("a" * 16 + "\u200b" + "b" * 16)
+        self.assertEqual(caught.exception.category, "invalid_input")
+        self.assertIn("invisible", str(caught.exception))
+
     def test_validate_and_save_is_atomic(self):
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "secrets" / "nexus_api_key.dpapi"

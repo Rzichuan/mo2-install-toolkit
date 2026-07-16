@@ -136,6 +136,20 @@ def run_auth_gui(secret_path: Path) -> GuiResult:
     def text(hwnd: int, value: str) -> None:
         user32.SetWindowTextW(hwnd, value)
 
+    def read_edit_text(hwnd: int) -> str:
+        # Read the EDIT control through WM_GETTEXT rather than the window
+        # manager helper. This is reliable for password-style EDIT controls
+        # and returns the underlying value, not the masking glyphs.
+        length = max(0, int(user32.GetWindowTextLengthW(hwnd)))
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.SendMessageW(
+            hwnd,
+            0x000D,  # WM_GETTEXT
+            len(buffer),
+            ctypes.cast(buffer, ctypes.c_void_p).value or 0,
+        )
+        return buffer.value
+
     def make_font(size: int, weight: int = 400) -> int:
         font = gdi32.CreateFontW(-scale(size), 0, 0, 0, weight, False, False, False, 1, 0, 0, 5, 0, "Segoe UI")
         fonts.append(font)
@@ -232,10 +246,7 @@ def run_auth_gui(secret_path: Path) -> GuiResult:
                 user32.InvalidateRect(handles["key"], None, True)
                 return 0
             if control_id == IDC_SAVE:
-                length = user32.GetWindowTextLengthW(handles["key"])
-                buffer = ctypes.create_unicode_buffer(length + 1)
-                user32.GetWindowTextW(handles["key"], buffer, len(buffer))
-                key = buffer.value
+                key = read_edit_text(handles["key"])
                 if not key.strip():
                     text(handles["status"], "请输入 Nexus API Key。")
                     return 0
