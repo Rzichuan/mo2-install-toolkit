@@ -34,6 +34,12 @@ function Get-LinkTarget([IO.FileSystemInfo]$Item) {
   if (-not $Item.Target) { return $null }
   return [IO.Path]::GetFullPath([string]@($Item.Target)[0])
 }
+function Remove-Junction([string]$Path) {
+  $Item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  if (-not $Item) { return }
+  if ($Item.LinkType -ne 'Junction') { throw "Refusing to remove a non-junction adapter path: $Path" }
+  [IO.Directory]::Delete([IO.Path]::GetFullPath($Path), $false)
+}
 if (-not (Test-PathWithin $StableBundle $ToolkitData)) { throw "Bundle path escaped toolkit data root: $StableBundle" }
 $Adapters = @()
 if ($Target -in @('Codex','Both')) { $Adapters += [pscustomobject]@{ name='Codex'; root=(Join-Path $AgentHome '.codex\skills'); path=(Join-Path $AgentHome '.codex\skills\mo2-mod-installer') } }
@@ -71,7 +77,7 @@ try {
     if ($Existing) {
       $ExistingTarget = Get-LinkTarget $Existing
       if ($Existing.LinkType -eq 'Junction' -and $ExistingTarget -and $ExistingTarget.Equals($StableBundle, [StringComparison]::OrdinalIgnoreCase)) {
-        Remove-Item -LiteralPath $AdapterPath -Force
+        Remove-Junction $AdapterPath
         $ManagedLinks += $AdapterPath
       } else {
         New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
@@ -109,7 +115,7 @@ try {
   [pscustomobject]@{ bundle=$StableBundle; tool_version=([string]$Version).Trim(); adapters=@($CreatedLinks); adapter_backups=@($AdapterBackups.backup); previous_bundle=$OldBundleBackup }
 } catch {
   if ($MutationStarted) {
-    foreach ($Link in $CreatedLinks) { if (Test-Path -LiteralPath $Link) { Remove-Item -LiteralPath $Link -Force } }
+    foreach ($Link in $CreatedLinks) { Remove-Junction $Link }
     foreach ($Saved in $AdapterBackups) { if (Test-Path -LiteralPath $Saved.backup) { Move-Item -LiteralPath $Saved.backup -Destination $Saved.path } }
     if (Test-Path -LiteralPath $StableBundle) { Remove-Item -LiteralPath $StableBundle -Recurse -Force }
     if ($OldBundleBackup -and (Test-Path -LiteralPath $OldBundleBackup)) { Move-Item -LiteralPath $OldBundleBackup -Destination $StableBundle }

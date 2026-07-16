@@ -2,6 +2,12 @@
   [string]$LocalAppDataRoot = $env:LOCALAPPDATA
 )
 $ErrorActionPreference = 'Stop'
+function Remove-Junction([string]$Path) {
+  $Item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  if (-not $Item) { return }
+  if ($Item.LinkType -ne 'Junction') { throw "Refusing to remove a non-junction adapter path: $Path" }
+  [IO.Directory]::Delete([IO.Path]::GetFullPath($Path), $false)
+}
 if (-not $LocalAppDataRoot) { throw 'LOCALAPPDATA is unavailable; pass -LocalAppDataRoot explicitly.' }
 $ToolkitData = [IO.Path]::GetFullPath((Join-Path $LocalAppDataRoot 'MO2AgentToolkit'))
 $Manifest = Join-Path $ToolkitData 'adapter-install.json'
@@ -22,7 +28,7 @@ foreach ($Adapter in $Data.adapters) {
   }
 }
 foreach ($Path in $ValidatedAdapters) {
-  if ($PSCmdlet.ShouldProcess($Path, 'Remove managed adapter junction')) { Remove-Item -LiteralPath $Path -Force }
+  if ($PSCmdlet.ShouldProcess($Path, 'Remove managed adapter junction')) { Remove-Junction $Path }
 }
 if (Test-Path -LiteralPath $Bundle) {
   if ($PSCmdlet.ShouldProcess($Bundle, 'Remove managed MO2 Skill Bundle')) { Remove-Item -LiteralPath $Bundle -Recurse -Force }

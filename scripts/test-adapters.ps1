@@ -1,4 +1,10 @@
 $ErrorActionPreference = 'Stop'
+function Remove-Junction([string]$Path) {
+  $Item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  if (-not $Item) { return }
+  if ($Item.LinkType -ne 'Junction') { throw "Expected Junction before removal: $Path" }
+  [IO.Directory]::Delete([IO.Path]::GetFullPath($Path), $false)
+}
 $Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $Bundle = (Resolve-Path -LiteralPath (Join-Path $Root 'dist\mo2-mod-installer-bundle')).Path
 $TempBase = [IO.Path]::GetFullPath((Join-Path $env:TEMP ('mo2-adapter-test-' + [guid]::NewGuid().ToString('N'))))
@@ -48,7 +54,7 @@ try {
 
   # Uninstall preflights every recorded adapter before removing any of them.
   $ClaudeLink = Join-Path $HomePath '.claude\skills\mo2-mod-installer'
-  Remove-Item -LiteralPath $ClaudeLink -Force
+  Remove-Junction $ClaudeLink
   New-Item -ItemType Directory -Path $ClaudeLink | Out-Null
   $UninstallFailed = $false
   try { & (Join-Path $Root 'scripts\uninstall-adapters.ps1') -LocalAppDataRoot $LocalPath | Out-Null }
