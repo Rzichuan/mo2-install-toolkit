@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 0.10.2 - 2026-07-16
+
+- Preserve the previous managed Skill when installation fails before the replacement Skill is committed.
+- Restore standard PowerShell `-WhatIf` and `-Confirm` behavior while retaining compatibility with `irm ... | iex`.
+- Exercise real `Invoke-Expression` install/uninstall, WhatIf, and rollback paths in the Windows integration test.
+
 ## 0.10.1 - 2026-07-16
 
 - Fix one-command install and uninstall execution through `irm ... | iex`, where PowerShell does not provide the `$PSCmdlet` variable.

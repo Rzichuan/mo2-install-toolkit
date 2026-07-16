@@ -3,7 +3,9 @@
   [switch]$RemoveRuntime
 )
 $ErrorActionPreference='Stop'
+$ShouldProcessContext=Get-Variable -Name PSCmdlet -ValueOnly -ErrorAction SilentlyContinue
 function Test-RequestedAction([string]$Path,[string]$Action){
+  if($null -ne $ShouldProcessContext){return $ShouldProcessContext.ShouldProcess($Path,$Action)}
   if($WhatIfPreference){Write-Host "What if: $Action -> $Path";return $false}
   return $true
 }

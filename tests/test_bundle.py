@@ -156,6 +156,10 @@ class BundleContractTests(unittest.TestCase):
         self.assertIn("[IO.Directory]::Delete", install)
         self.assertNotIn("$PSCmdlet.ShouldProcess", install)
         self.assertNotIn("$PSCmdlet.ShouldProcess", uninstall)
+        self.assertIn("Get-Variable -Name PSCmdlet", install)
+        self.assertIn("$ShouldProcessContext.ShouldProcess", install)
+        self.assertIn("$ShouldProcessContext.ShouldProcess", uninstall)
+        self.assertIn("$SkillInstalled", install)
         self.assertIn("RemoveRuntime", uninstall)
         self.assertIn("Refusing to remove unmanaged or changed adapter", uninstall)
 

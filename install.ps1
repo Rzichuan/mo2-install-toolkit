@@ -6,7 +6,9 @@
   [string]$AssetDirectory
 )
 $ErrorActionPreference = 'Stop'
+$ShouldProcessContext = Get-Variable -Name PSCmdlet -ValueOnly -ErrorAction SilentlyContinue
 function Test-RequestedAction([string]$Path,[string]$Action){
+  if($null -ne $ShouldProcessContext){return $ShouldProcessContext.ShouldProcess($Path,$Action)}
   if($WhatIfPreference){Write-Host "What if: $Action -> $Path";return $false}
   return $true
 }
@@ -91,6 +93,7 @@ if ($Target -eq 'Auto') {
 $Adapters = @()
 if ($Target -in @('Codex','Both')) { $Adapters += [pscustomobject]@{name='Codex';root=(Join-Path $AgentHome '.codex\skills');path=(Join-Path $AgentHome '.codex\skills\mo2-mod-installer')} }
 if ($Target -in @('Claude','Both')) { $Adapters += [pscustomobject]@{name='Claude';root=(Join-Path $AgentHome '.claude\skills');path=(Join-Path $AgentHome '.claude\skills\mo2-mod-installer')} }
+if (-not (Test-RequestedAction $ToolkitData "Install MO2 Agent Toolkit $Version for $Target")) { return }
 
 $Work = Join-Path ([IO.Path]::GetTempPath()) ('mo2-installer-' + [guid]::NewGuid().ToString('N'))
 $SkillParent = Join-Path $ToolkitData 'skill-bundles'
@@ -100,7 +103,7 @@ $StableRuntime = Join-Path $RuntimeParent 'mo2-runtime'
 $BackupRoot = Join-Path $ToolkitData ('adapter-backups\' + (Get-Date -Format 'yyyyMMdd-HHmmssfff'))
 $BundleBackup = Join-Path $ToolkitData ('bundle-backups\' + (Get-Date -Format 'yyyyMMdd-HHmmssfff') + '\mo2-mod-installer')
 $ManifestPath = Join-Path $ToolkitData 'adapter-install.json'
-$CreatedLinks=@(); $AdapterBackups=@(); $OldManagedLinks=@(); $SkillMoved=$false; $MutationStarted=$false; $RuntimeInstalled=$false; $RuntimeQuarantine=$null
+$CreatedLinks=@(); $AdapterBackups=@(); $OldManagedLinks=@(); $SkillMoved=$false; $SkillInstalled=$false; $MutationStarted=$false; $RuntimeInstalled=$false; $RuntimeQuarantine=$null
 try {
   New-Item -ItemType Directory -Path $Work -Force | Out-Null
   foreach ($Name in $Names) { Copy-OrDownloadAsset $Name "$BaseUri/$Name" (Join-Path $Work $Name) }
@@ -126,7 +129,6 @@ try {
   foreach($Required in @((Join-Path $SkillCandidate 'SKILL.md'),(Join-Path $SkillCandidate 'scripts\ensure-runtime.ps1'),(Join-Path $RuntimeCandidate 'bin\mo2-tool.exe'),(Join-Path $RuntimeCandidate 'bin\_internal'))){if(-not(Test-Path -LiteralPath $Required)){throw "Incomplete asset; missing: $Required"}}
   $ActualVersion = ((& (Join-Path $RuntimeCandidate 'bin\mo2-tool.exe') --version) | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or $ActualVersion -ne $Version) { throw "Runtime self-test returned '$ActualVersion'." }
-  if (-not (Test-RequestedAction $ToolkitData "Install MO2 Agent Toolkit $Version for $Target")) { return }
   $MutationStarted=$true
   New-Item -ItemType Directory -Path $SkillParent,$RuntimeParent -Force | Out-Null
   if (Test-Path -LiteralPath $StableRuntime) {
@@ -147,7 +149,7 @@ try {
     New-Item -ItemType Directory -Path (Split-Path -Parent $BundleBackup) -Force | Out-Null
     Move-Item -LiteralPath $StableSkill -Destination $BundleBackup; $SkillMoved=$true
   }
-  Move-Item -LiteralPath $SkillCandidate -Destination $StableSkill
+  Move-Item -LiteralPath $SkillCandidate -Destination $StableSkill; $SkillInstalled=$true
   foreach($Adapter in $Adapters){
     $Root=[IO.Path]::GetFullPath($Adapter.root); $Path=[IO.Path]::GetFullPath($Adapter.path)
     if(-not(Test-ChildPath $Path $Root)){throw "Adapter escaped skill root: $Path"}
@@ -181,7 +183,7 @@ try {
   if($MutationStarted){
     foreach($Link in $CreatedLinks){Remove-Junction $Link}
     foreach($Saved in $AdapterBackups){if(Test-Path -LiteralPath $Saved.backup){Move-Item -LiteralPath $Saved.backup -Destination $Saved.path}}
-    if(Test-Path -LiteralPath $StableSkill){Remove-Item -LiteralPath $StableSkill -Recurse -Force}
+    if($SkillInstalled -and (Test-Path -LiteralPath $StableSkill)){Remove-Item -LiteralPath $StableSkill -Recurse -Force}
     if($SkillMoved -and (Test-Path -LiteralPath $BundleBackup)){Move-Item -LiteralPath $BundleBackup -Destination $StableSkill}
     if($RuntimeInstalled -and (Test-Path -LiteralPath $StableRuntime)){Remove-Item -LiteralPath $StableRuntime -Recurse -Force}
     if($RuntimeQuarantine -and (Test-Path -LiteralPath $RuntimeQuarantine)){Move-Item -LiteralPath $RuntimeQuarantine -Destination $StableRuntime}
