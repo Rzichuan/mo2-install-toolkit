@@ -24,8 +24,8 @@ irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.
 Pin a reproducible release by downloading the installer from that tag and passing the matching version:
 
 ```powershell
-irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.0/install.ps1 -OutFile install.ps1
-.\install.ps1 -Version 0.10.0
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.1/install.ps1 -OutFile install.ps1
+.\install.ps1 -Version 0.10.1
 ```
 
 Rerun the installer to repair or upgrade. To remove the managed Skill and adapters while preserving configuration, credentials, backups, and runtime caches:
@@ -38,15 +38,15 @@ Codex marketplace installation and a tagged Claude clone remain supported advanc
 
 ### Runtime Release and offline transfer
 
-The GitHub Release asset `mo2-runtime-v0.10.0-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
+The GitHub Release asset `mo2-runtime-v0.10.1-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
 
 For a machine that must remain offline, first install or clone the matching tagged Skill/plugin on that machine. On another machine, download the runtime ZIP and adjacent `.sha256`, verify the checksum, then extract the archive into the version directory:
 
 ```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.0
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.1
 ```
 
-The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.0\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
+The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.1\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
 
 The repository's `scripts\build-bundle.ps1` can still create a local complete Bundle under `dist\mo2-mod-installer-bundle`. `scripts\install-adapters.ps1 -BundlePath <local-complete-bundle> -Target Both` remains available for existing installations that want one shared Bundle plus Codex/Claude junctions. This locally built compatibility Bundle is not a GitHub Release asset and is not required for normal clone-based installation.
 

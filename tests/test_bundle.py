@@ -154,6 +154,8 @@ class BundleContractTests(unittest.TestCase):
         self.assertIn("Expand-SafeArchive", install)
         self.assertIn("New-Item -ItemType Junction", install)
         self.assertIn("[IO.Directory]::Delete", install)
+        self.assertNotIn("$PSCmdlet.ShouldProcess", install)
+        self.assertNotIn("$PSCmdlet.ShouldProcess", uninstall)
         self.assertIn("RemoveRuntime", uninstall)
         self.assertIn("Refusing to remove unmanaged or changed adapter", uninstall)
 

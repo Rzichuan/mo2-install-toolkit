@@ -1,5 +1,9 @@
 ## Unreleased
 
+## 0.10.1 - 2026-07-16
+
+- Fix one-command install and uninstall execution through `irm ... | iex`, where PowerShell does not provide the `$PSCmdlet` variable.
+
 ## 0.10.0 - 2026-07-16
 
 - Add a one-command Windows installer that auto-detects Codex/Claude, downloads and verifies Skill and runtime Release assets, installs both atomically, and self-tests the pinned runtime.

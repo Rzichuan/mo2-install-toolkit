@@ -6,6 +6,10 @@
   [string]$AssetDirectory
 )
 $ErrorActionPreference = 'Stop'
+function Test-RequestedAction([string]$Path,[string]$Action){
+  if($WhatIfPreference){Write-Host "What if: $Action -> $Path";return $false}
+  return $true
+}
 Set-StrictMode -Version 2.0
 
 function Get-Sha256([string]$Path) {
@@ -122,7 +126,7 @@ try {
   foreach($Required in @((Join-Path $SkillCandidate 'SKILL.md'),(Join-Path $SkillCandidate 'scripts\ensure-runtime.ps1'),(Join-Path $RuntimeCandidate 'bin\mo2-tool.exe'),(Join-Path $RuntimeCandidate 'bin\_internal'))){if(-not(Test-Path -LiteralPath $Required)){throw "Incomplete asset; missing: $Required"}}
   $ActualVersion = ((& (Join-Path $RuntimeCandidate 'bin\mo2-tool.exe') --version) | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or $ActualVersion -ne $Version) { throw "Runtime self-test returned '$ActualVersion'." }
-  if (-not $PSCmdlet.ShouldProcess($ToolkitData, "Install MO2 Agent Toolkit $Version for $Target")) { return }
+  if (-not (Test-RequestedAction $ToolkitData "Install MO2 Agent Toolkit $Version for $Target")) { return }
   $MutationStarted=$true
   New-Item -ItemType Directory -Path $SkillParent,$RuntimeParent -Force | Out-Null
   if (Test-Path -LiteralPath $StableRuntime) {
