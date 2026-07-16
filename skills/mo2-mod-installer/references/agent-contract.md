@@ -4,6 +4,12 @@ Use `tool-usage.md` for exact command recipes, operator-facing branch handling, 
 
 Resolve `bin/mo2-tool.exe` relative to the loaded `mo2-mod-installer` Skill directory and invoke that absolute path with the `.exe` suffix. Claude Code uses `$HOME/.claude/skills/mo2-mod-installer/bin/mo2-tool.exe`; Codex uses `$HOME/.codex/skills/mo2-mod-installer/bin/mo2-tool.exe`. Never resolve `bin` from the current working directory, search `dist`, copy the executable, or fall back to `PATH`. A missing executable or `_internal` directory means the Bundle is damaged and is a hard stop. Always request JSON for discovery, inspection, planning, apply, and audit. Exit 1 is review, not a crash. Never bypass safety exit 3. Never parse human output when JSON exists or expose DPAPI credentials.
 
+## Environment configuration
+
+Start every environment check with `doctor --json`. When configuration is missing or invalid, or paths are intentionally changing, `setup --dry-run --json` is the only permitted discovery command. Discovery is read-only. Present the MO2 instance root, derived `mods` directory, Profile, game directory, download directory, archive directory, and 7-Zip path as one concrete summary. Obtain explicit confirmation of those values in the current conversation flow before any configuration write. One candidate, a default, prior confirmation, silence, or agent judgment does not grant authorization.
+
+After confirmation, run setup with explicit `--instance` and `--profile` and the confirmed `--game` and `--seven-zip` values; apply confirmed download/archive preferences explicitly with `config set`. Bare `setup --json` is prohibited for agent workflows even though the CLI retains it for compatibility. Finish with `config show --json` and `doctor --json`. Existing valid configuration requires no new confirmation if no path is changing. When Doctor reports an invalid configured path, show its current value alongside discovered alternatives and never replace it autonomously.
+
 ## Ordinary MO2 installation
 
 Required sequence: `doctor`, `install inspect`, classify and explicitly name the mod, `install plan --name`, naming/operation/related-placement review, user confirmation, `install apply --yes`, then `profile audit`. Nexus plans pass `--modid` and `--file-id` together and bind official filename/version metadata.

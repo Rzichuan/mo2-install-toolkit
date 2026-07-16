@@ -26,8 +26,8 @@ irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.
 需要可复现的固定版本时，从对应 tag 获取安装器并指定相同版本：
 
 ```powershell
-irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.3/install.ps1 -OutFile install.ps1
-.\install.ps1 -Version 0.10.3
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.4/install.ps1 -OutFile install.ps1
+.\install.ps1 -Version 0.10.4
 ```
 
 离线或测试使用 `-AssetDirectory` 时，若不指定 `-Version`，目录中应包含 `mo2-installer-manifest.json` 以及清单命名的两个 ZIP。若显式指定 `-Version`，原兼容路径保持不变：目录中必须包含对应的 Skill/Runtime ZIP 和两个相邻 `.sha256` 文件。
@@ -40,17 +40,39 @@ irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/uninstal
 
 Codex marketplace 和 Claude tagged clone 仍作为高级安装方式受到支持。源码 clone 会在首次使用时下载固定 Runtime；一键安装器则在安装阶段完成下载。
 
+### 首次环境配置与路径变更
+
+安装完成不代表用户授权 Agent 选择 MO2 环境。首次使用、配置无效或准备变更任一路径时，必须采用两阶段流程：
+
+```powershell
+& $Tool doctor --json
+& $Tool setup --dry-run --json
+```
+
+Dry-run 只读，不写配置。Agent 必须完整展示 MO2 instance 根目录、派生的 `mods` 目录、Profile、游戏目录、下载目录、安装后归档目录和 7-Zip 路径，并在当前对话流程中取得用户对这些具体值的明确确认。唯一候选、默认值、历史确认、沉默或 Agent 自行判断都不构成授权。
+
+确认后才可显式应用并验收：
+
+```powershell
+& $Tool setup --instance "<已确认的 MO2 instance 路径>" --profile "<已确认的 Profile>" --game "<已确认的 Skyrim 路径>" --seven-zip "<已确认的 7z.exe 路径>" --json
+& $Tool config set --download-directory "<已确认的下载目录>" --archive-directory "<已确认的归档目录>" --archive-after-install true --json
+& $Tool config show --json
+& $Tool doctor --json
+```
+
+Agent 禁止使用裸 `setup --json` 自动写入发现结果。已有配置有效且路径不变时无需重复确认。Doctor 发现已配置路径无效时，Agent 必须展示当前值和只读发现的替代候选，不得自行覆盖。
+
 ### Runtime Release 与离线转移
 
-GitHub Release 中的 `mo2-runtime-v0.10.3-win-x64.zip` **不是** Skill/plugin，也不是独立安装程序。它只是 clone 后的 Skill/plugin 自动下载的可执行运行时依赖。普通用户应使用一键安装命令，不需要手动下载 Release 资产；安装器会自动使用 Skill 和 Runtime 两类资产。
+GitHub Release 中的 `mo2-runtime-v0.10.4-win-x64.zip` **不是** Skill/plugin，也不是独立安装程序。它只是 clone 后的 Skill/plugin 自动下载的可执行运行时依赖。普通用户应使用一键安装命令，不需要手动下载 Release 资产；安装器会自动使用 Skill 和 Runtime 两类资产。
 
 若目标机器必须完全离线，请先在目标机器安装或 clone 匹配 tag 的 Skill/plugin。然后在联网机器下载 runtime ZIP 和相邻的 `.sha256`，校验后将压缩包解压到版本目录：
 
 ```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.3
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.4
 ```
 
-最终元数据路径必须是 `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.3\mo2-runtime\runtime.json`，不要产生 `mo2-runtime\mo2-runtime` 双层目录。
+最终元数据路径必须是 `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.4\mo2-runtime\runtime.json`，不要产生 `mo2-runtime\mo2-runtime` 双层目录。
 
 仓库的 `scripts\build-bundle.ps1` 仍可在 `dist\mo2-mod-installer-bundle` 构建本地完整 Bundle。既有用户可使用 `scripts\install-adapters.ps1 -BundlePath <本地完整Bundle> -Target Both` 部署共享 Bundle 和 Codex/Claude junction。这个兼容 Bundle 不会作为 GitHub Release 资产发布，也不是正常 clone 安装所必需的。
 

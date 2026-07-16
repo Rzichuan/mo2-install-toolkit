@@ -26,8 +26,8 @@ irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.
 Pin a reproducible release by downloading the installer from that tag and passing the matching version:
 
 ```powershell
-irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.3/install.ps1 -OutFile install.ps1
-.\install.ps1 -Version 0.10.3
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.4/install.ps1 -OutFile install.ps1
+.\install.ps1 -Version 0.10.4
 ```
 
 For an offline or test asset directory, omit `-Version` when the directory contains `mo2-installer-manifest.json` plus the two ZIPs named by it. When `-Version` is supplied, the existing compatibility path remains unchanged: the directory must contain the matching Skill and Runtime ZIPs and both adjacent `.sha256` files.
@@ -40,17 +40,39 @@ irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/uninstal
 
 Codex marketplace installation and a tagged Claude clone remain supported advanced alternatives. A source clone downloads its pinned runtime on first use; the one-command installer downloads it during installation.
 
+### First configuration and path changes
+
+Installation does not authorize an agent to choose an MO2 environment. For first use, invalid configuration, or any requested path change, use a two-phase workflow:
+
+```powershell
+& $Tool doctor --json
+& $Tool setup --dry-run --json
+```
+
+The dry run is read-only. The agent must show the MO2 instance root, derived `mods` directory, Profile, game directory, download directory, archive directory, and 7-Zip executable, then obtain explicit confirmation of those exact values in the current conversation flow. A unique candidate, default, previous confirmation, silence, or agent judgment is not authorization.
+
+After confirmation, apply explicit values and verify them:
+
+```powershell
+& $Tool setup --instance "<confirmed MO2 instance path>" --profile "<confirmed profile>" --game "<confirmed Skyrim path>" --seven-zip "<confirmed 7z.exe path>" --json
+& $Tool config set --download-directory "<confirmed downloads path>" --archive-directory "<confirmed archive path>" --archive-after-install true --json
+& $Tool config show --json
+& $Tool doctor --json
+```
+
+Agents must never use bare `setup --json` to auto-write discovered values. Valid existing configuration needs no repeated confirmation when paths are unchanged. If Doctor finds an invalid configured path, the agent must show the current value and read-only alternatives instead of replacing it automatically.
+
 ### Runtime Release and offline transfer
 
-The GitHub Release asset `mo2-runtime-v0.10.3-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
+The GitHub Release asset `mo2-runtime-v0.10.4-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
 
 For a machine that must remain offline, first install or clone the matching tagged Skill/plugin on that machine. On another machine, download the runtime ZIP and adjacent `.sha256`, verify the checksum, then extract the archive into the version directory:
 
 ```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.3
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.4
 ```
 
-The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.3\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
+The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.4\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
 
 The repository's `scripts\build-bundle.ps1` can still create a local complete Bundle under `dist\mo2-mod-installer-bundle`. `scripts\install-adapters.ps1 -BundlePath <local-complete-bundle> -Target Both` remains available for existing installations that want one shared Bundle plus Codex/Claude junctions. This locally built compatibility Bundle is not a GitHub Release asset and is not required for normal clone-based installation.
 

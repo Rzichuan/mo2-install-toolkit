@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 0.10.4 - 2026-07-16
+
+- Require read-only `setup --dry-run --json` discovery and current-flow user confirmation before agents write first-use, repaired, or changed environment paths.
+- Require agents to present the complete instance, derived mods, Profile, game, download, archive, and 7-Zip summary; a unique candidate is explicitly not authorization.
+- Require explicit instance/Profile setup application followed by `config show --json` and `doctor --json`; retain the existing CLI and JSON schema for compatibility.
+
 ## 0.10.3 - 2026-07-16
 
 - Discover the latest stable installer version through the fixed-name `mo2-installer-manifest.json` Release asset instead of the anonymous GitHub REST API.

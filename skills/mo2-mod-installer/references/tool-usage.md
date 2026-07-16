@@ -22,24 +22,25 @@ Use `& $Tool ... --json` in PowerShell. Never put a Nexus key on the command lin
 
 ## First use, configuration, and diagnostics
 
-Preview setup when configuration is missing, then apply the reviewed instance/Profile selection:
+Start with diagnostics. When configuration is absent or invalid, or environment paths are to be changed, perform discovery only; `setup --dry-run` must not write configuration:
 
 ```powershell
+& $Tool doctor --json
 & $Tool setup --dry-run --json
-& $Tool setup --instance "<MO2 instance path>" --profile "<profile>" --game "<Skyrim path>" --seven-zip "<7z.exe path>" --json
+```
+
+Show the user the complete proposed configuration: MO2 instance root, its derived `mods` directory, Profile, game directory, download directory, post-install archive directory, and 7-Zip executable. Obtain explicit confirmation of those concrete values in the current conversation flow. Even a single unambiguous candidate is only a candidate; defaults, prior confirmation, silence, and agent judgment are not authorization.
+
+Only after that confirmation, apply explicit selectors and all confirmed auxiliary paths. Never run bare `setup --json`:
+
+```powershell
+& $Tool setup --instance "<confirmed MO2 instance path>" --profile "<confirmed profile>" --game "<confirmed Skyrim path>" --seven-zip "<confirmed 7z.exe path>" --json
+& $Tool config set --download-directory "<confirmed browser or MO2 downloads path>" --archive-directory "<confirmed archive path>" --archive-after-install true --json
 & $Tool config show --json
 & $Tool doctor --json
 ```
 
-If auto-discovery returns one unambiguous instance and Profile, `setup --json` may be used without selectors. Do not rerun setup merely to work around a doctor failure: correct the reported path or close the reported process.
-
-Configure download and post-install archive preferences before creating an installation plan, because the plan freezes them:
-
-```powershell
-& $Tool config set --download-directory "<browser or MO2 downloads path>" --json
-& $Tool config set --archive-directory "<MO2 archive/downloads path>" --archive-after-install true --json
-& $Tool config show --json
-```
+Valid existing configuration needs no repeated confirmation when no path is changing. If Doctor reports an invalid path, display the current value and read-only replacement candidates; do not overwrite it autonomously or rerun setup merely to hide the failure.
 
 Set or inspect the DPAPI-protected Nexus credential without exposing it:
 

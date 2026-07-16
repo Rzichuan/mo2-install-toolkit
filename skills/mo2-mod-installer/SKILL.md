@@ -18,7 +18,7 @@ Use only the absolute `mo2-tool.exe` path returned by the runtime bootstrap as t
 
 ## Canonical installation workflow
 
-1. Run `mo2-tool doctor --json`. Use `setup --json` only when configuration is absent. Close MO2 and game-related processes before mutation.
+1. Run `mo2-tool doctor --json`. If configuration is missing or invalid, or the user wants to change environment paths, run only `mo2-tool setup --dry-run --json` for read-only discovery. Show the MO2 instance root, derived `mods` directory, Profile, game directory, download directory, archive directory, and 7-Zip path. A sole candidate, default, historical confirmation, silence, or agent judgment is never authorization: obtain explicit confirmation of that concrete summary in the current conversation flow. Then write with explicit `--instance` and `--profile` plus every confirmed auxiliary path; never use bare `setup --json`. Verify with `config show --json` and `doctor --json`. If existing configuration is valid and paths are not changing, do not request confirmation again. If Doctor reports an invalid path, show its current value and replacement candidates and never overwrite it autonomously. Close MO2 and game-related processes before mutation.
 2. For Nexus sources, resolve metadata and dependencies, then obtain the archive through the supported Premium or official browser-assisted flow.
 3. Run `mo2-tool install inspect <archive> --json` and branch on `layout.handler`, `layout.support_status`, and `layout.installer_risk`.
 4. Inspect the mod purpose, archive contents, selected FOMOD files, plugins, and active Profile taxonomy. Choose an explicit final MO2 `--name`; never pass through the archive filename merely for convenience.
