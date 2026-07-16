@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .auth import AuthError, validate_and_save
 
-API_PAGE = "https://www.nexusmods.com/users/myaccount?tab=api"
+API_PAGE = "https://www.nexusmods.com/users/myaccount?tab=api%20access"
 WM_APP_AUTH_DONE = 0x8001
 IDC_KEY = 101
 IDC_SHOW = 102
@@ -170,7 +170,13 @@ def run_auth_gui(secret_path: Path) -> GuiResult:
             user32.DestroyWindow(handles["window"])
         else:
             state["pending_error"] = error
-            text(handles["status"], str(error))
+            # Preserve the failed result if the user closes the dialog after an
+            # error, so the CLI can return the actual reason instead of turning
+            # it into an indistinguishable cancellation.
+            state["result"] = GuiResult("error", secret_path.exists(), error)
+            detail = str(error)
+            text(handles["status"], detail + "\n请检查后点击“重试并保存”，或点击“取消”退出。")
+            text(handles["save"], "重试并保存")
             user32.SetFocus(handles["key"])
 
     @WNDPROC
@@ -269,7 +275,7 @@ def run_auth_gui(secret_path: Path) -> GuiResult:
     wc = WNDCLASSW(0, window_proc, 0, 0, instance, None, user32.LoadCursorW(None, ctypes.cast(ctypes.c_void_p(32512), wintypes.LPCWSTR)), 16, None, class_name)
     user32.RegisterClassW(ctypes.byref(wc))
 
-    window_width, window_height = scale(660), scale(430)
+    window_width, window_height = scale(660), scale(470)
     screen_width = user32.GetSystemMetrics(0)
     screen_height = user32.GetSystemMetrics(1)
     x = max(0, (screen_width - window_width) // 2)
@@ -307,13 +313,13 @@ def run_auth_gui(secret_path: Path) -> GuiResult:
 
     handles["status"] = create(
         "STATIC", "密钥需要联网验证。现有密钥只会在新密钥保存成功后被替换。",
-        static, 30, 258, 590, 42, IDC_STATUS, font=font_roles["small"],
+        static, 30, 258, 590, 62, IDC_STATUS, font=font_roles["small"],
     )
-    handles["progress"] = create("msctls_progress32", "", 0x40000008, 30, 302, 590, 5, IDC_PROGRESS)
+    handles["progress"] = create("msctls_progress32", "", 0x40000008, 30, 326, 590, 5, IDC_PROGRESS)
     user32.ShowWindow(handles["progress"], 0)
 
-    handles["save"] = create("BUTTON", "验证并保存", 0x50010001, 350, 336, 130, 38, IDC_SAVE)
-    create("BUTTON", "取消", 0x50010000, 490, 336, 130, 38, IDC_CANCEL)
+    handles["save"] = create("BUTTON", "验证并保存", 0x50010001, 350, 362, 130, 38, IDC_SAVE)
+    create("BUTTON", "取消", 0x50010000, 490, 362, 130, 38, IDC_CANCEL)
 
     user32.ShowWindow(handles["window"], 5)
     user32.UpdateWindow(handles["window"])

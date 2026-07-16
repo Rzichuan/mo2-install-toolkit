@@ -84,8 +84,20 @@ def validate_key(key: str, timeout: float = 15.0) -> ValidationResult:
                 raise AuthError("Nexus rejected the API key", 2, "invalid_credential")
             return ValidationResult(True)
     except urllib.error.HTTPError as exc:
-        if exc.code in (401, 403):
-            raise AuthError("Nexus API key is invalid or unauthorized", 2, "invalid_credential") from None
+        if exc.code == 401:
+            raise AuthError(
+                "Nexus rejected the API key (HTTP 401 Unauthorized). "
+                "Use the Personal API Key from the Nexus API Access page and check that it has not been revoked.",
+                2,
+                "invalid_credential",
+            ) from None
+        if exc.code == 403:
+            raise AuthError(
+                "Nexus refused API access (HTTP 403 Forbidden). "
+                "The account or key may not be authorized, or the current VPN/proxy/network may be blocked.",
+                2,
+                "access_forbidden",
+            ) from None
         raise AuthError(f"Nexus validation service returned HTTP {exc.code}", 4, "network_error") from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise AuthError("Could not reach Nexus to validate the API key; retry when the network is available", 4, "network_error") from None

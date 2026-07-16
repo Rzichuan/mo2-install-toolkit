@@ -33,14 +33,25 @@ class AuthTests(unittest.TestCase):
                     auth.validate_and_save("a" * 32, target)
             self.assertEqual(target.read_bytes(), b"old")
 
-    def test_unauthorized_response_is_redacted(self):
+    def test_unauthorized_response_is_redacted_and_actionable(self):
         secret = "sensitive-key-never-output"
         response = urllib.error.HTTPError(auth.VALIDATE_URL, 401, "Unauthorized", {}, None)
         with patch("urllib.request.urlopen", side_effect=response):
             with self.assertRaises(auth.AuthError) as caught:
                 auth.validate_key(secret)
         self.assertEqual(caught.exception.category, "invalid_credential")
+        self.assertIn("HTTP 401", str(caught.exception))
+        self.assertIn("API Access", str(caught.exception))
         self.assertNotIn(secret, str(caught.exception))
+
+    def test_forbidden_response_explains_access_or_network_cause(self):
+        response = urllib.error.HTTPError(auth.VALIDATE_URL, 403, "Forbidden", {}, None)
+        with patch("urllib.request.urlopen", side_effect=response):
+            with self.assertRaises(auth.AuthError) as caught:
+                auth.validate_key("a" * 32)
+        self.assertEqual(caught.exception.category, "access_forbidden")
+        self.assertIn("HTTP 403", str(caught.exception))
+        self.assertIn("VPN", str(caught.exception))
 
     def test_network_failure_is_not_saved(self):
         with tempfile.TemporaryDirectory() as td:
@@ -96,6 +107,25 @@ class AuthCliTests(unittest.TestCase):
             code = cli.main(["auth", "set", "--gui", "--json"])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output.getvalue())["status"], "cancelled")
+
+    def test_gui_validation_error_is_returned_with_reason(self):
+        output = io.StringIO()
+        result = GuiResult(
+            "error",
+            False,
+            auth.AuthError(
+                "Nexus rejected the API key (HTTP 401 Unauthorized)",
+                2,
+                "invalid_credential",
+            ),
+        )
+        with patch("mo2_agent_toolkit.auth_gui.run_auth_gui", return_value=result), contextlib.redirect_stdout(output):
+            code = cli.main(["auth", "set", "--gui", "--json"])
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("HTTP 401", payload["errors"][0])
+        self.assertEqual(payload["data"]["category"], "invalid_credential")
 
     def test_console_is_default_and_validates(self):
         output = io.StringIO()

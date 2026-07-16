@@ -1,5 +1,10 @@
 ## Unreleased
 
+## 0.10.6 - 2026-07-17
+
+- Improve Nexus API-key validation errors by distinguishing HTTP 401 invalid credentials from HTTP 403 access/network refusals.
+- Fix the GUI API Access link, preserve validation errors when the dialog is cancelled, and make retry guidance visible.
+
 ## 0.10.5 - 2026-07-17
 
 - Fix the Windows credential GUI on frozen Python runtimes where `ctypes.wintypes.HCURSOR` is not exported by using its equivalent `HANDLE` type.
