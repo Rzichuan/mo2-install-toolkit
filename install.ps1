@@ -13,6 +13,8 @@ function Test-RequestedAction([string]$Path,[string]$Action){
   return $true
 }
 Set-StrictMode -Version 2.0
+$InstallerManifestName = 'mo2-installer-manifest.json'
+$LatestInstallerManifestUri = 'https://github.com/Rzichuan/mo2-install-toolkit/releases/latest/download/mo2-installer-manifest.json'
 
 function Get-Sha256([string]$Path) {
   $Stream = [IO.File]::OpenRead($Path); $Sha = [Security.Cryptography.SHA256]::Create()
@@ -62,6 +64,30 @@ function Copy-OrDownloadAsset([string]$Name, [string]$Uri, [string]$Destination)
     Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination
   }
 }
+function Read-InstallerManifest {
+  $TemporaryPath = $null
+  try {
+    if ($AssetDirectory) {
+      $ManifestPath = Join-Path ([IO.Path]::GetFullPath($AssetDirectory)) $InstallerManifestName
+      if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) { throw "Test/local asset not found: $ManifestPath" }
+    } else {
+      $TemporaryPath = Join-Path ([IO.Path]::GetTempPath()) ('mo2-installer-manifest-' + [guid]::NewGuid().ToString('N') + '.json')
+      Invoke-WebRequest -UseBasicParsing -Uri $LatestInstallerManifestUri -OutFile $TemporaryPath
+      $ManifestPath = $TemporaryPath
+    }
+    $Utf8 = [Text.UTF8Encoding]::new($false, $true)
+    $Text = [IO.File]::ReadAllText($ManifestPath, $Utf8)
+    return ($Text | ConvertFrom-Json)
+  } finally {
+    if ($TemporaryPath) {
+      $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+      $TempFull = [IO.Path]::GetFullPath($TemporaryPath)
+      if ($TempFull.StartsWith($TempRoot + '\', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $TempFull -PathType Leaf)) {
+        Remove-Item -LiteralPath $TempFull -Force
+      }
+    }
+  }
+}
 
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'MO2 Agent Toolkit currently supports Windows x64 only.' }
 if (-not $LocalAppDataRoot) { throw 'LOCALAPPDATA is unavailable; pass -LocalAppDataRoot.' }
@@ -69,18 +95,43 @@ if (-not $LocalAppDataRoot) { throw 'LOCALAPPDATA is unavailable; pass -LocalApp
 $AgentHome = [IO.Path]::GetFullPath($AgentHome)
 $ToolkitData = [IO.Path]::GetFullPath((Join-Path $LocalAppDataRoot 'MO2AgentToolkit'))
 
-if (-not $Version) {
-  if ($AssetDirectory) { throw 'Local asset installation requires -Version.' }
-  $Release = Invoke-RestMethod -UseBasicParsing -Headers @{'User-Agent'='MO2-Agent-Toolkit-Installer';'Accept'='application/vnd.github+json'} -Uri 'https://api.github.com/repos/Rzichuan/mo2-install-toolkit/releases/latest'
-  if ($Release.draft -or $Release.prerelease -or [string]$Release.tag_name -notmatch '^v(\d+\.\d+\.\d+)$') { throw 'GitHub did not return a valid stable release.' }
-  $Version = $Matches[1]
+$UseInstallerManifest = -not [bool]$Version
+$ExpectedHashes = @{}
+if ($UseInstallerManifest) {
+  try {
+    $InstallerManifest = Read-InstallerManifest
+    if ([string]$InstallerManifest.schema_version -cne '1') { throw 'Unsupported installer manifest schema.' }
+    $ManifestVersion = [string]$InstallerManifest.toolkit_version
+    if ($ManifestVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid toolkit_version.' }
+    $ManifestTag = "v$ManifestVersion"
+    $ExpectedSkillAsset = "mo2-skill-$ManifestTag.zip"
+    $ExpectedRuntimeAsset = "mo2-runtime-$ManifestTag-win-x64.zip"
+    if ([string]$InstallerManifest.release_tag -cne $ManifestTag) { throw 'release_tag does not match toolkit_version.' }
+    if ([string]$InstallerManifest.platform -cne 'win-x64') { throw 'Installer manifest platform must be win-x64.' }
+    if ([string]$InstallerManifest.skill_asset_name -cne $ExpectedSkillAsset) { throw 'Unexpected Skill asset name.' }
+    if ([string]$InstallerManifest.runtime_asset_name -cne $ExpectedRuntimeAsset) { throw 'Unexpected Runtime asset name.' }
+    $SkillHash = [string]$InstallerManifest.skill_sha256
+    $RuntimeHash = [string]$InstallerManifest.runtime_sha256
+    if ($SkillHash -notmatch '^[0-9A-Fa-f]{64}$') { throw 'Invalid Skill SHA-256.' }
+    if ($RuntimeHash -notmatch '^[0-9A-Fa-f]{64}$') { throw 'Invalid Runtime SHA-256.' }
+    $Version = $ManifestVersion
+    $Tag = $ManifestTag
+    $SkillAsset = $ExpectedSkillAsset
+    $RuntimeAsset = $ExpectedRuntimeAsset
+    $ExpectedHashes[$SkillAsset] = $SkillHash.ToLowerInvariant()
+    $ExpectedHashes[$RuntimeAsset] = $RuntimeHash.ToLowerInvariant()
+  } catch {
+    throw "Latest installer manifest is unavailable or invalid: $($_.Exception.Message) Use a tagged installer with its matching -Version value for a pinned installation; no GitHub API fallback was attempted."
+  }
+} else {
+  if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid version: $Version" }
+  $Tag = "v$Version"
+  $SkillAsset = "mo2-skill-$Tag.zip"
+  $RuntimeAsset = "mo2-runtime-$Tag-win-x64.zip"
 }
-if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid version: $Version" }
-$Tag = "v$Version"
 $BaseUri = "https://github.com/Rzichuan/mo2-install-toolkit/releases/download/$Tag"
-$SkillAsset = "mo2-skill-$Tag.zip"
-$RuntimeAsset = "mo2-runtime-$Tag-win-x64.zip"
-$Names = @($SkillAsset, "$SkillAsset.sha256", $RuntimeAsset, "$RuntimeAsset.sha256")
+if ($UseInstallerManifest) { $Names = @($SkillAsset, $RuntimeAsset) }
+else { $Names = @($SkillAsset, "$SkillAsset.sha256", $RuntimeAsset, "$RuntimeAsset.sha256") }
 
 if ($Target -eq 'Auto') {
   $HasCodex = Test-Path -LiteralPath (Join-Path $AgentHome '.codex') -PathType Container
@@ -108,9 +159,15 @@ try {
   New-Item -ItemType Directory -Path $Work -Force | Out-Null
   foreach ($Name in $Names) { Copy-OrDownloadAsset $Name "$BaseUri/$Name" (Join-Path $Work $Name) }
   foreach ($Asset in @($SkillAsset,$RuntimeAsset)) {
-    $Expected = Read-ExpectedHash (Join-Path $Work "$Asset.sha256") $Asset
+    $Expected = if ($UseInstallerManifest) { [string]$ExpectedHashes[$Asset] } else { Read-ExpectedHash (Join-Path $Work "$Asset.sha256") $Asset }
     $Actual = Get-Sha256 (Join-Path $Work $Asset)
-    if ($Actual -ne $Expected) { throw "SHA-256 verification failed for $Asset." }
+    if ($Actual -ne $Expected) {
+      $HashFailure = "SHA-256 verification failed for $Asset."
+      if ($UseInstallerManifest) {
+        throw "$HashFailure Use a tagged installer with its matching -Version value for a pinned installation; no GitHub API fallback was attempted."
+      }
+      throw $HashFailure
+    }
   }
   $Extract = Join-Path $Work 'extract'; $SkillExtract=Join-Path $Extract 'skill'; $RuntimeExtract=Join-Path $Extract 'runtime'
   New-Item -ItemType Directory -Path $SkillExtract,$RuntimeExtract -Force | Out-Null

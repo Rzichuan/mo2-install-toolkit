@@ -1,5 +1,12 @@
 ## Unreleased
 
+## 0.10.3 - 2026-07-16
+
+- Discover the latest stable installer version through the fixed-name `mo2-installer-manifest.json` Release asset instead of the anonymous GitHub REST API.
+- Strictly validate manifest schema, version, tag, platform, asset names, and SHA-256 values before changing user directories; fail closed with tagged-installer guidance.
+- Download only the manifest and two ZIP assets by default while preserving explicit `-Version` compatibility with adjacent `.sha256` files.
+- Generate and publish the installer manifest from the packaged ZIP hashes, and cover default/offline installation plus malformed-manifest failures on Windows PowerShell 5.1.
+
 ## 0.10.2 - 2026-07-16
 
 - Preserve the previous managed Skill when installation fails before the replacement Skill is committed.

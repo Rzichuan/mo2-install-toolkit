@@ -14,11 +14,21 @@ $Platform = [string]$Manifest.platform
 $ArchiveRoot = [string]$Manifest.archive_root
 $AssetName = [string]$Manifest.asset_name
 $ChecksumName = [string]$Manifest.checksum_asset_name
-$SkillAssetName = "mo2-skill-v$Version.zip"
+$ReleaseTag = "v$Version"
+$SkillAssetName = "mo2-skill-$ReleaseTag.zip"
 $SkillChecksumName = "$SkillAssetName.sha256"
-if ($ArchiveRoot -ne 'mo2-runtime') { throw "Unexpected runtime archive root: $ArchiveRoot" }
-if ($AssetName -ne "mo2-runtime-v$Version-win-x64.zip") { throw "Unexpected runtime asset name: $AssetName" }
-if ($ChecksumName -ne "$AssetName.sha256") { throw "Unexpected checksum asset name: $ChecksumName" }
+$InstallerManifestName = 'mo2-installer-manifest.json'
+$ReleaseBaseUri = "https://github.com/Rzichuan/mo2-install-toolkit/releases/download/$ReleaseTag"
+if ([string]$Manifest.schema_version -cne '1') { throw 'Unsupported runtime manifest schema.' }
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid runtime version: $Version" }
+if ([string]$Manifest.toolkit_version -cne $Version) { throw 'Toolkit and runtime manifest versions differ.' }
+if ($Platform -cne 'win-x64') { throw "Unexpected runtime platform: $Platform" }
+if ([string]$Manifest.release_tag -cne $ReleaseTag) { throw "Unexpected release tag: $($Manifest.release_tag)" }
+if ($ArchiveRoot -cne 'mo2-runtime') { throw "Unexpected runtime archive root: $ArchiveRoot" }
+if ($AssetName -cne "mo2-runtime-$ReleaseTag-win-x64.zip") { throw "Unexpected runtime asset name: $AssetName" }
+if ($ChecksumName -cne "$AssetName.sha256") { throw "Unexpected checksum asset name: $ChecksumName" }
+if ([string]$Manifest.asset_url -cne "$ReleaseBaseUri/$AssetName") { throw 'Unexpected runtime asset URL.' }
+if ([string]$Manifest.checksum_url -cne "$ReleaseBaseUri/$ChecksumName") { throw 'Unexpected runtime checksum URL.' }
 $SourceTool = Join-Path $ToolDirectory 'mo2-tool.exe'
 $SourceInternal = Join-Path $ToolDirectory '_internal'
 if (-not (Test-Path -LiteralPath $SourceTool -PathType Leaf)) { throw "Tool executable not found: $SourceTool" }
@@ -71,9 +81,10 @@ try {
   $Checksum = Join-Path $OutputDirectory $ChecksumName
   $SkillZip = Join-Path $OutputDirectory $SkillAssetName
   $SkillChecksum = Join-Path $OutputDirectory $SkillChecksumName
+  $InstallerManifestPath = Join-Path $OutputDirectory $InstallerManifestName
   $ObsoleteBundle = Join-Path $OutputDirectory "mo2-mod-installer-v$Version-win-x64.zip"
   $ObsoleteChecksum = "$ObsoleteBundle.sha256"
-  foreach ($PreviousAsset in @($Zip, $Checksum, $SkillZip, $SkillChecksum, $ObsoleteBundle, $ObsoleteChecksum)) {
+  foreach ($PreviousAsset in @($Zip, $Checksum, $SkillZip, $SkillChecksum, $InstallerManifestPath, $ObsoleteBundle, $ObsoleteChecksum)) {
     if (Test-Path -LiteralPath $PreviousAsset -PathType Leaf) { Remove-Item -LiteralPath $PreviousAsset -Force }
   }
   Compress-Archive -LiteralPath $StageRuntime -DestinationPath $Zip -CompressionLevel Optimal
@@ -88,7 +99,19 @@ try {
   try { $SkillHash = ([BitConverter]::ToString($SkillSha256.ComputeHash($SkillStream))).Replace('-', '').ToLowerInvariant() }
   finally { $SkillSha256.Dispose(); $SkillStream.Dispose() }
   [IO.File]::WriteAllText($SkillChecksum, "$SkillHash  $SkillAssetName`n", [Text.Encoding]::ASCII)
-  [pscustomobject]@{ version=$Version; runtime_asset=$Zip; runtime_checksum=$Checksum; runtime_sha256=$Hash; skill_asset=$SkillZip; skill_checksum=$SkillChecksum; skill_sha256=$SkillHash }
+  $InstallerManifestData = [ordered]@{
+    schema_version = 1
+    toolkit_version = $Version
+    release_tag = $ReleaseTag
+    platform = $Platform
+    skill_asset_name = $SkillAssetName
+    skill_sha256 = $SkillHash
+    runtime_asset_name = $AssetName
+    runtime_sha256 = $Hash
+  }
+  $InstallerManifestJson = $InstallerManifestData | ConvertTo-Json
+  [IO.File]::WriteAllText($InstallerManifestPath, $InstallerManifestJson + "`n", [Text.UTF8Encoding]::new($false))
+  [pscustomobject]@{ version=$Version; runtime_asset=$Zip; runtime_checksum=$Checksum; runtime_sha256=$Hash; skill_asset=$SkillZip; skill_checksum=$SkillChecksum; skill_sha256=$SkillHash; installer_manifest=$InstallerManifestPath }
 } finally {
   $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
   $StageFull = [IO.Path]::GetFullPath($Stage)

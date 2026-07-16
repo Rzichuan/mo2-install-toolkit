@@ -42,9 +42,16 @@ class BootstrapIntegrationTests(unittest.TestCase):
         if os.name != "nt":
             raise unittest.SkipTest("runtime bootstrap is Windows-only")
         cls.base_manifest = json.loads((SOURCE_SKILL / "runtime-manifest.json").read_text(encoding="utf-8"))
+        cls.installer_manifest_path = RELEASE / "mo2-installer-manifest.json"
+        if not cls.installer_manifest_path.is_file():
+            raise RuntimeError("run scripts/package-release.ps1 before bootstrap integration tests")
+        cls.installer_manifest = json.loads(cls.installer_manifest_path.read_text(encoding="utf-8"))
         cls.asset = RELEASE / cls.base_manifest["asset_name"]
         cls.checksum = RELEASE / cls.base_manifest["checksum_asset_name"]
-        if not BUNDLE.is_dir() or not cls.asset.is_file() or not cls.checksum.is_file():
+        cls.skill_asset = RELEASE / cls.installer_manifest["skill_asset_name"]
+        cls.skill_checksum = RELEASE / f"{cls.skill_asset.name}.sha256"
+        required = (BUNDLE, cls.asset, cls.checksum, cls.skill_asset, cls.skill_checksum)
+        if not BUNDLE.is_dir() or not all(path.is_file() for path in required[1:]):
             raise RuntimeError("run scripts/build.ps1 and scripts/package-release.ps1 before bootstrap integration tests")
 
     def setUp(self) -> None:
@@ -102,6 +109,50 @@ class BootstrapIntegrationTests(unittest.TestCase):
     def payload(self, result: subprocess.CompletedProcess[str]) -> dict[str, object]:
         self.assertTrue(result.stdout.strip(), result.stderr)
         return json.loads(result.stdout.strip().splitlines()[-1])
+
+    def test_installer_manifest_matches_packaged_assets(self) -> None:
+        manifest = self.installer_manifest
+        version = self.base_manifest["tool_version"]
+        release_tag = f"v{version}"
+        expected_skill_name = f"mo2-skill-{release_tag}.zip"
+        self.assertEqual(
+            {
+                "schema_version", "toolkit_version", "release_tag", "platform",
+                "skill_asset_name", "skill_sha256", "runtime_asset_name", "runtime_sha256",
+            },
+            set(manifest),
+        )
+        self.assertEqual(1, manifest["schema_version"])
+        self.assertEqual(version, manifest["toolkit_version"])
+        self.assertEqual(self.base_manifest["toolkit_version"], manifest["toolkit_version"])
+        self.assertEqual(self.base_manifest["release_tag"], manifest["release_tag"])
+        self.assertEqual(release_tag, manifest["release_tag"])
+        self.assertEqual(self.base_manifest["platform"], manifest["platform"])
+        self.assertEqual(expected_skill_name, manifest["skill_asset_name"])
+        self.assertEqual(self.base_manifest["asset_name"], manifest["runtime_asset_name"])
+        self.assertEqual(sha256(self.skill_asset), manifest["skill_sha256"])
+        self.assertEqual(sha256(self.asset), manifest["runtime_sha256"])
+        self.assertRegex(manifest["skill_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(manifest["runtime_sha256"], r"^[0-9a-f]{64}$")
+
+        self.assertEqual(
+            [manifest["skill_sha256"], manifest["skill_asset_name"]],
+            self.skill_checksum.read_text(encoding="ascii").split(),
+        )
+        self.assertEqual(
+            [manifest["runtime_sha256"], manifest["runtime_asset_name"]],
+            self.checksum.read_text(encoding="ascii").split(),
+        )
+        with zipfile.ZipFile(self.skill_asset) as archive:
+            names = {name.replace("\\", "/").rstrip("/") for name in archive.namelist() if name.rstrip("/")}
+            embedded_runtime_manifest = json.loads(
+                archive.read("mo2-skill/runtime-manifest.json").decode("utf-8")
+            )
+            skill_metadata = json.loads(archive.read("mo2-skill/skill.json").decode("utf-8"))
+        self.assertEqual({"mo2-skill"}, {name.split("/", 1)[0] for name in names})
+        self.assertEqual(self.base_manifest, embedded_runtime_manifest)
+        self.assertEqual(version, skill_metadata["toolkit_version"])
+        self.assertEqual(manifest["platform"], skill_metadata["platform"])
 
     def test_release_archive_contains_runtime_only(self) -> None:
         with zipfile.ZipFile(self.asset) as archive:

@@ -86,6 +86,12 @@ class BundleContractTests(unittest.TestCase):
         self.assertNotIn("mo2-mod-installer-bundle", package)
         self.assertIn("$SkillAssetName", package)
         self.assertIn("$StageSkill 'SKILL.md'", package)
+        self.assertIn("mo2-installer-manifest.json", package)
+        self.assertIn("skill_asset_name", package)
+        self.assertIn("skill_sha256", package)
+        self.assertIn("runtime_asset_name", package)
+        self.assertIn("runtime_sha256", package)
+        self.assertIn("release/*.json", workflow)
 
     def test_bundle_includes_project_docs_and_vendored_licenses(self):
         build = (ROOT / "scripts" / "build-bundle.ps1").read_text(encoding="utf-8")
@@ -147,7 +153,13 @@ class BundleContractTests(unittest.TestCase):
     def test_one_command_installer_contract(self):
         install = (ROOT / "install.ps1").read_text(encoding="utf-8")
         uninstall = (ROOT / "uninstall.ps1").read_text(encoding="utf-8")
-        self.assertIn("releases/latest", install)
+        self.assertIn(
+            "https://github.com/Rzichuan/mo2-install-toolkit/releases/latest/download/mo2-installer-manifest.json",
+            install,
+        )
+        self.assertNotIn("api.github.com", install)
+        self.assertNotIn("Invoke-RestMethod", install)
+        self.assertIn("Use a tagged installer", install)
         self.assertIn("mo2-skill-$Tag.zip", install)
         self.assertIn("mo2-runtime-$Tag-win-x64.zip", install)
         self.assertIn("SHA-256 verification failed", install)

@@ -55,6 +55,7 @@ jobs:
           path: |
             release/*.zip
             release/*.sha256
+            release/*.json
           if-no-files-found: error
       - name: Create draft GitHub Release with assets
         if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
@@ -65,6 +66,7 @@ jobs:
           files: |
             release/*.zip
             release/*.sha256
+            release/*.json
       - name: Publish validated GitHub Release
         if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
         shell: powershell

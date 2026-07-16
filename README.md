@@ -6,13 +6,15 @@ A Windows x64, agent-neutral toolkit for safe Mod Organizer 2 operations. The re
 
 ## Quick start
 
-Run this single command in Windows PowerShell. It detects Codex and Claude, installs the latest stable Skill and pinned runtime, verifies both SHA-256 checksums, and performs a runtime self-test:
+Run this single command in Windows PowerShell. It detects Codex and Claude, installs the latest stable Skill and pinned runtime, verifies both ZIPs against the SHA-256 values in the Release installer manifest, and performs a runtime self-test:
 
 ```powershell
 irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.ps1 | iex
 ```
 
 No Git, Python, .NET SDK, administrator access, `PATH` edit, or first-use download is required. Start a new agent session after installation. The managed Skill and runtime are stored under `%LOCALAPPDATA%\MO2AgentToolkit`.
+
+When `-Version` is omitted, the installer fetches the fixed-name `mo2-installer-manifest.json` through GitHub's ordinary `releases/latest/download` redirect. It never calls the GitHub REST API and does not require a token. If the manifest is unavailable or invalid, installation stops safely and directs you to a tagged installer instead of falling back to the API. The default path then downloads only the Skill and Runtime ZIPs; adjacent `.sha256` files remain published for offline and manual verification.
 
 If neither client can be detected, or if you want to inspect the script before running it:
 
@@ -24,9 +26,11 @@ irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.
 Pin a reproducible release by downloading the installer from that tag and passing the matching version:
 
 ```powershell
-irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.2/install.ps1 -OutFile install.ps1
-.\install.ps1 -Version 0.10.2
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.3/install.ps1 -OutFile install.ps1
+.\install.ps1 -Version 0.10.3
 ```
+
+For an offline or test asset directory, omit `-Version` when the directory contains `mo2-installer-manifest.json` plus the two ZIPs named by it. When `-Version` is supplied, the existing compatibility path remains unchanged: the directory must contain the matching Skill and Runtime ZIPs and both adjacent `.sha256` files.
 
 Rerun the installer to repair or upgrade. To remove the managed Skill and adapters while preserving configuration, credentials, backups, and runtime caches:
 
@@ -38,15 +42,15 @@ Codex marketplace installation and a tagged Claude clone remain supported advanc
 
 ### Runtime Release and offline transfer
 
-The GitHub Release asset `mo2-runtime-v0.10.2-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
+The GitHub Release asset `mo2-runtime-v0.10.3-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
 
 For a machine that must remain offline, first install or clone the matching tagged Skill/plugin on that machine. On another machine, download the runtime ZIP and adjacent `.sha256`, verify the checksum, then extract the archive into the version directory:
 
 ```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.2
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.3
 ```
 
-The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.2\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
+The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.3\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
 
 The repository's `scripts\build-bundle.ps1` can still create a local complete Bundle under `dist\mo2-mod-installer-bundle`. `scripts\install-adapters.ps1 -BundlePath <local-complete-bundle> -Target Both` remains available for existing installations that want one shared Bundle plus Codex/Claude junctions. This locally built compatibility Bundle is not a GitHub Release asset and is not required for normal clone-based installation.
 
