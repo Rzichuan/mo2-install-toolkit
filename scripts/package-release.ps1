@@ -14,6 +14,8 @@ $Platform = [string]$Manifest.platform
 $ArchiveRoot = [string]$Manifest.archive_root
 $AssetName = [string]$Manifest.asset_name
 $ChecksumName = [string]$Manifest.checksum_asset_name
+$SkillAssetName = "mo2-skill-v$Version.zip"
+$SkillChecksumName = "$SkillAssetName.sha256"
 if ($ArchiveRoot -ne 'mo2-runtime') { throw "Unexpected runtime archive root: $ArchiveRoot" }
 if ($AssetName -ne "mo2-runtime-v$Version-win-x64.zip") { throw "Unexpected runtime asset name: $AssetName" }
 if ($ChecksumName -ne "$AssetName.sha256") { throw "Unexpected checksum asset name: $ChecksumName" }
@@ -24,8 +26,15 @@ if (-not (Test-Path -LiteralPath $SourceInternal -PathType Container)) { throw "
 $Stage = Join-Path ([IO.Path]::GetTempPath()) ('mo2-runtime-stage-' + [guid]::NewGuid().ToString('N'))
 try {
   $StageRuntime = Join-Path $Stage $ArchiveRoot
+  $StageSkill = Join-Path $Stage 'mo2-skill'
   $StageBin = Join-Path $StageRuntime 'bin'
   New-Item -ItemType Directory -Path $StageBin -Force | Out-Null
+  New-Item -ItemType Directory -Path $StageSkill -Force | Out-Null
+  Get-ChildItem -LiteralPath (Join-Path $Root 'skills\mo2-mod-installer') -Force | Copy-Item -Destination $StageSkill -Recurse -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'LICENSE') -Destination $StageSkill -Force
+  Copy-Item -LiteralPath (Join-Path $Root 'THIRD_PARTY_NOTICES.md') -Destination $StageSkill -Force
+  $SkillMetadata = [ordered]@{ schema_version=1; toolkit_version=$Version; platform=$Platform } | ConvertTo-Json
+  [IO.File]::WriteAllText((Join-Path $StageSkill 'skill.json'), $SkillMetadata + "`n", [Text.UTF8Encoding]::new($false))
   Get-ChildItem -LiteralPath $ToolDirectory -Force | Copy-Item -Destination $StageBin -Recurse -Force
   Copy-Item -LiteralPath (Join-Path $Root 'LICENSE') -Destination $StageRuntime -Force
   Copy-Item -LiteralPath (Join-Path $Root 'THIRD_PARTY_NOTICES.md') -Destination $StageRuntime -Force
@@ -39,6 +48,10 @@ try {
   } | ConvertTo-Json
   [IO.File]::WriteAllText((Join-Path $StageRuntime 'runtime.json'), $RuntimeMetadata + "`n", [Text.UTF8Encoding]::new($false))
   foreach ($Required in @(
+    (Join-Path $StageSkill 'skill.json'),
+    (Join-Path $StageSkill 'SKILL.md'),
+    (Join-Path $StageSkill 'runtime-manifest.json'),
+    (Join-Path $StageSkill 'scripts\ensure-runtime.ps1'),
     (Join-Path $StageRuntime 'runtime.json'),
     (Join-Path $StageRuntime 'LICENSE'),
     (Join-Path $StageRuntime 'THIRD_PARTY_NOTICES.md'),
@@ -56,18 +69,26 @@ try {
   New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
   $Zip = Join-Path $OutputDirectory $AssetName
   $Checksum = Join-Path $OutputDirectory $ChecksumName
+  $SkillZip = Join-Path $OutputDirectory $SkillAssetName
+  $SkillChecksum = Join-Path $OutputDirectory $SkillChecksumName
   $ObsoleteBundle = Join-Path $OutputDirectory "mo2-mod-installer-v$Version-win-x64.zip"
   $ObsoleteChecksum = "$ObsoleteBundle.sha256"
-  foreach ($PreviousAsset in @($Zip, $Checksum, $ObsoleteBundle, $ObsoleteChecksum)) {
+  foreach ($PreviousAsset in @($Zip, $Checksum, $SkillZip, $SkillChecksum, $ObsoleteBundle, $ObsoleteChecksum)) {
     if (Test-Path -LiteralPath $PreviousAsset -PathType Leaf) { Remove-Item -LiteralPath $PreviousAsset -Force }
   }
   Compress-Archive -LiteralPath $StageRuntime -DestinationPath $Zip -CompressionLevel Optimal
+  Compress-Archive -LiteralPath $StageSkill -DestinationPath $SkillZip -CompressionLevel Optimal
   $Stream = [IO.File]::OpenRead($Zip)
   $Sha256 = [Security.Cryptography.SHA256]::Create()
   try { $Hash = ([BitConverter]::ToString($Sha256.ComputeHash($Stream))).Replace('-', '').ToLowerInvariant() }
   finally { $Sha256.Dispose(); $Stream.Dispose() }
   [IO.File]::WriteAllText($Checksum, "$Hash  $AssetName`n", [Text.Encoding]::ASCII)
-  [pscustomobject]@{ version=$Version; asset=$Zip; checksum=$Checksum; sha256=$Hash }
+  $SkillStream = [IO.File]::OpenRead($SkillZip)
+  $SkillSha256 = [Security.Cryptography.SHA256]::Create()
+  try { $SkillHash = ([BitConverter]::ToString($SkillSha256.ComputeHash($SkillStream))).Replace('-', '').ToLowerInvariant() }
+  finally { $SkillSha256.Dispose(); $SkillStream.Dispose() }
+  [IO.File]::WriteAllText($SkillChecksum, "$SkillHash  $SkillAssetName`n", [Text.Encoding]::ASCII)
+  [pscustomobject]@{ version=$Version; runtime_asset=$Zip; runtime_checksum=$Checksum; runtime_sha256=$Hash; skill_asset=$SkillZip; skill_checksum=$SkillChecksum; skill_sha256=$SkillHash }
 } finally {
   $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
   $StageFull = [IO.Path]::GetFullPath($Stage)

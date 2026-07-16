@@ -1,5 +1,10 @@
 ## Unreleased
 
+## 0.10.0 - 2026-07-16
+
+- Add a one-command Windows installer that auto-detects Codex/Claude, downloads and verifies Skill and runtime Release assets, installs both atomically, and self-tests the pinned runtime.
+- Add a safe managed uninstaller, one-command installation documentation, and CI coverage for idempotent install/uninstall.
+
 ## 0.9.0 - 2026-07-16
 
 - Make source clones self-bootstrapping through a strictly pinned, SHA-256-verified Windows runtime cache.

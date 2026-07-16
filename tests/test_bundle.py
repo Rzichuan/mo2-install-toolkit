@@ -68,7 +68,7 @@ class BundleContractTests(unittest.TestCase):
         self.assertEqual(version, manifest["tool_version"])
         self.assertEqual(version, manifest["toolkit_version"])
 
-    def test_release_is_tag_driven_and_packages_runtime_only(self):
+    def test_release_is_tag_driven_and_packages_skill_and_runtime(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         package = (ROOT / "scripts" / "package-release.ps1").read_text(encoding="utf-8")
         self.assertIn("actions/setup-dotnet@v4", workflow)
@@ -84,7 +84,8 @@ class BundleContractTests(unittest.TestCase):
         self.assertIn("runtime.json", package)
         self.assertIn("third_party", package)
         self.assertNotIn("mo2-mod-installer-bundle", package)
-        self.assertNotIn("SKILL.md", package)
+        self.assertIn("$SkillAssetName", package)
+        self.assertIn("$StageSkill 'SKILL.md'", package)
 
     def test_bundle_includes_project_docs_and_vendored_licenses(self):
         build = (ROOT / "scripts" / "build-bundle.ps1").read_text(encoding="utf-8")
@@ -142,6 +143,19 @@ class BundleContractTests(unittest.TestCase):
         self.assertIn("adapter-install.json", uninstall)
         self.assertIn("Refusing to remove unmanaged or changed adapter", uninstall)
 
+
+    def test_one_command_installer_contract(self):
+        install = (ROOT / "install.ps1").read_text(encoding="utf-8")
+        uninstall = (ROOT / "uninstall.ps1").read_text(encoding="utf-8")
+        self.assertIn("releases/latest", install)
+        self.assertIn("mo2-skill-$Tag.zip", install)
+        self.assertIn("mo2-runtime-$Tag-win-x64.zip", install)
+        self.assertIn("SHA-256 verification failed", install)
+        self.assertIn("Expand-SafeArchive", install)
+        self.assertIn("New-Item -ItemType Junction", install)
+        self.assertIn("[IO.Directory]::Delete", install)
+        self.assertIn("RemoveRuntime", uninstall)
+        self.assertIn("Refusing to remove unmanaged or changed adapter", uninstall)
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,58 +6,47 @@ A Windows x64, agent-neutral toolkit for safe Mod Organizer 2 operations. The re
 
 ## Quick start
 
-### Codex plugin marketplace
-
-Install the repository at the version that matches its runtime:
+Run this single command in Windows PowerShell. It detects Codex and Claude, installs the latest stable Skill and pinned runtime, verifies both SHA-256 checksums, and performs a runtime self-test:
 
 ```powershell
-codex plugin marketplace add Rzichuan/mo2-install-toolkit --ref v0.9.0
-codex plugin add mo2-agent-toolkit@mo2-install-toolkit
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.ps1 | iex
 ```
 
-Alternatively, install **MO2 Agent Toolkit** from the Codex/ChatGPT plugin directory after adding the marketplace. Restart or start a new task, then ask for an MO2 operation; Codex loads the nested `mo2-mod-installer` Skill automatically. If you already cloned the repository locally, pass that repository path to `codex plugin marketplace add` instead.
+No Git, Python, .NET SDK, administrator access, `PATH` edit, or first-use download is required. Start a new agent session after installation. The managed Skill and runtime are stored under `%LOCALAPPDATA%\MO2AgentToolkit`.
 
-### Claude direct clone
-
-Clone the pinned tag directly into Claude's Skill directory:
+If neither client can be detected, or if you want to inspect the script before running it:
 
 ```powershell
-New-Item -ItemType Directory -Path "$HOME\.claude\skills" -Force | Out-Null
-git clone --branch v0.9.0 --depth 1 https://github.com/Rzichuan/mo2-install-toolkit.git "$HOME\.claude\skills\mo2-mod-installer"
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -Target Codex       # Codex, Claude, Both, or Auto
 ```
 
-The root `SKILL.md` forwards Claude to the authoritative nested Skill. Start a new Claude task after cloning.
-
-### First use
-
-The source clone intentionally contains no 100 MiB runtime. On the first CLI-backed request, the Skill downloads the pinned `v0.9.0` Windows x64 runtime payload (about 45 MiB compressed), verifies its SHA-256, metadata, and exact executable version, and caches it under:
-
-```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0\mo2-runtime
-```
-
-No Python, .NET SDK, local build, `PATH` edit, or manual EXE copy is required. A valid cache works offline. MO2 instance/Profile selection and an optional Nexus API key are configured through the existing `setup`, `auth`, and `doctor` commands when needed.
-
-For a manual source-checkout smoke test:
+Pin a reproducible release by downloading the installer from that tag and passing the matching version:
 
 ```powershell
-$Ready = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\skills\mo2-mod-installer\scripts\ensure-runtime.ps1 -Json | ConvertFrom-Json
-if ($Ready.status -ne 'ready') { throw ($Ready.errors -join '; ') }
-$Tool = $Ready.tool_path
-& $Tool doctor --json
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.0/install.ps1 -OutFile install.ps1
+.\install.ps1 -Version 0.10.0
 ```
+
+Rerun the installer to repair or upgrade. To remove the managed Skill and adapters while preserving configuration, credentials, backups, and runtime caches:
+
+```powershell
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/uninstall.ps1 | iex
+```
+
+Codex marketplace installation and a tagged Claude clone remain supported advanced alternatives. A source clone downloads its pinned runtime on first use; the one-command installer downloads it during installation.
 
 ### Runtime Release and offline transfer
 
-The GitHub Release asset `mo2-runtime-v0.9.0-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should install through the Codex marketplace or clone the repository and should not download the Release asset manually.
+The GitHub Release asset `mo2-runtime-v0.10.0-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
 
 For a machine that must remain offline, first install or clone the matching tagged Skill/plugin on that machine. On another machine, download the runtime ZIP and adjacent `.sha256`, verify the checksum, then extract the archive into the version directory:
 
 ```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.0
 ```
 
-The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
+The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.0\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
 
 The repository's `scripts\build-bundle.ps1` can still create a local complete Bundle under `dist\mo2-mod-installer-bundle`. `scripts\install-adapters.ps1 -BundlePath <local-complete-bundle> -Target Both` remains available for existing installations that want one shared Bundle plus Codex/Claude junctions. This locally built compatibility Bundle is not a GitHub Release asset and is not required for normal clone-based installation.
 

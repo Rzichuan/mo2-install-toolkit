@@ -31,9 +31,12 @@ jobs:
       - name: Test legacy/offline adapters
         shell: powershell
         run: ./scripts/test-adapters.ps1
-      - name: Package pinned runtime asset
+      - name: Package pinned Skill and runtime assets
         shell: powershell
         run: ./scripts/package-release.ps1
+      - name: Test one-command installer
+        shell: powershell
+        run: ./scripts/test-oneclick-installer.ps1
       - name: Test bootstrap and release asset
         run: python -X utf8 tests/bootstrap_integration.py
       - name: Validate tag and distribution versions

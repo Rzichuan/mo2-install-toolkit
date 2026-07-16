@@ -6,58 +6,47 @@
 
 ## 快速开始
 
-### Codex plugin marketplace
-
-安装与运行时版本匹配的仓库版本：
+在 Windows PowerShell 中执行这一条命令。安装器会自动检测 Codex 和 Claude，安装最新稳定版 Skill 与固定版本 Runtime，校验两个 SHA-256，并执行运行时自检：
 
 ```powershell
-codex plugin marketplace add Rzichuan/mo2-install-toolkit --ref v0.9.0
-codex plugin add mo2-agent-toolkit@mo2-install-toolkit
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.ps1 | iex
 ```
 
-也可以先添加 marketplace，再从 Codex/ChatGPT plugin 目录安装 **MO2 Agent Toolkit**。重启或新建任务后直接提出 MO2 操作请求，Codex 会自动加载嵌套的 `mo2-mod-installer` Skill。若已经在本地 clone 本仓库，也可以把本地仓库路径传给 `codex plugin marketplace add`。
+无需 Git、Python、.NET SDK、管理员权限、修改 `PATH`，首次使用时也不需要再次下载。安装完成后请新建 Agent 会话。托管 Skill 和 Runtime 位于 `%LOCALAPPDATA%\MO2AgentToolkit`。
 
-### Claude 直接 clone
-
-将固定 tag clone 到 Claude 的 Skill 目录：
+如果没有自动检测到客户端，或希望先审查脚本再执行：
 
 ```powershell
-New-Item -ItemType Directory -Path "$HOME\.claude\skills" -Force | Out-Null
-git clone --branch v0.9.0 --depth 1 https://github.com/Rzichuan/mo2-install-toolkit.git "$HOME\.claude\skills\mo2-mod-installer"
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -Target Codex       # Codex、Claude、Both 或 Auto
 ```
 
-根目录的 `SKILL.md` 会转发到唯一权威的嵌套 Skill。clone 完成后请新建 Claude 任务。
-
-### 首次使用
-
-源码 clone 不包含约 100 MiB 的运行时。第一次执行需要 CLI 的任务时，Skill 会下载固定的 `v0.9.0` Windows x64 runtime payload（压缩后约 45 MiB），校验 SHA-256、`runtime.json` 元数据和可执行文件精确版本，然后缓存到：
-
-```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0\mo2-runtime
-```
-
-无需 Python、.NET SDK、本地构建、修改 `PATH` 或手动复制 EXE。缓存有效后可以离线使用。MO2 实例/Profile 和可选 Nexus API Key 会在需要时通过 `setup`、`auth`、`doctor` 配置。
-
-手动验证源码 checkout：
+需要可复现的固定版本时，从对应 tag 获取安装器并指定相同版本：
 
 ```powershell
-$Ready = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\skills\mo2-mod-installer\scripts\ensure-runtime.ps1 -Json | ConvertFrom-Json
-if ($Ready.status -ne 'ready') { throw ($Ready.errors -join '; ') }
-$Tool = $Ready.tool_path
-& $Tool doctor --json
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.0/install.ps1 -OutFile install.ps1
+.\install.ps1 -Version 0.10.0
 ```
+
+重复执行安装器即可修复或升级。以下命令移除托管 Skill 和入口，但保留配置、凭据、备份和 Runtime 缓存：
+
+```powershell
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/uninstall.ps1 | iex
+```
+
+Codex marketplace 和 Claude tagged clone 仍作为高级安装方式受到支持。源码 clone 会在首次使用时下载固定 Runtime；一键安装器则在安装阶段完成下载。
 
 ### Runtime Release 与离线转移
 
-GitHub Release 中的 `mo2-runtime-v0.9.0-win-x64.zip` **不是** Skill/plugin，也不是独立安装程序。它只是 clone 后的 Skill/plugin 自动下载的可执行运行时依赖。普通用户应通过 Codex marketplace 安装或直接 clone 仓库，通常不需要手动下载 Release 资产。
+GitHub Release 中的 `mo2-runtime-v0.10.0-win-x64.zip` **不是** Skill/plugin，也不是独立安装程序。它只是 clone 后的 Skill/plugin 自动下载的可执行运行时依赖。普通用户应使用一键安装命令，不需要手动下载 Release 资产；安装器会自动使用 Skill 和 Runtime 两类资产。
 
 若目标机器必须完全离线，请先在目标机器安装或 clone 匹配 tag 的 Skill/plugin。然后在联网机器下载 runtime ZIP 和相邻的 `.sha256`，校验后将压缩包解压到版本目录：
 
 ```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.0
 ```
 
-最终元数据路径必须是 `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.9.0\mo2-runtime\runtime.json`，不要产生 `mo2-runtime\mo2-runtime` 双层目录。
+最终元数据路径必须是 `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.0\mo2-runtime\runtime.json`，不要产生 `mo2-runtime\mo2-runtime` 双层目录。
 
 仓库的 `scripts\build-bundle.ps1` 仍可在 `dist\mo2-mod-installer-bundle` 构建本地完整 Bundle。既有用户可使用 `scripts\install-adapters.ps1 -BundlePath <本地完整Bundle> -Target Both` 部署共享 Bundle 和 Codex/Claude junction。这个兼容 Bundle 不会作为 GitHub Release 资产发布，也不是正常 clone 安装所必需的。
 
