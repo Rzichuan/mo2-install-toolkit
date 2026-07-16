@@ -1,5 +1,10 @@
 ## Unreleased
 
+## 0.10.5 - 2026-07-17
+
+- Fix the Windows credential GUI on frozen Python runtimes where `ctypes.wintypes.HCURSOR` is not exported by using its equivalent `HANDLE` type.
+- Clarify that `auth set --console` requires a real interactive Windows terminal and that PowerShell syntax must not be sent directly to Bash.
+
 ## 0.10.4 - 2026-07-16
 
 - Require read-only `setup --dry-run --json` discovery and current-flow user confirmation before agents write first-use, repaired, or changed environment paths.

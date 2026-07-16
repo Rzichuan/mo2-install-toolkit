@@ -22,6 +22,11 @@ IDC_PROGRESS = 107
 WM_SETFONT = 0x0030
 PBM_SETMARQUEE = 0x040A
 
+# HCURSOR is an alias for HANDLE. Some supported Python/ctypes builds do not
+# expose the alias in ctypes.wintypes (notably frozen runtimes), so do not
+# import it unconditionally at GUI startup.
+HCURSOR = getattr(wintypes, "HCURSOR", wintypes.HANDLE)
+
 
 @dataclass(frozen=True)
 class GuiResult:
@@ -101,7 +106,7 @@ def run_auth_gui(secret_path: Path) -> GuiResult:
     gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
     gdi32.DeleteObject.restype = wintypes.BOOL
     user32.LoadCursorW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR]
-    user32.LoadCursorW.restype = wintypes.HCURSOR
+    user32.LoadCursorW.restype = HCURSOR
     user32.RegisterClassW.restype = wintypes.ATOM
     user32.GetSystemMetrics.argtypes = [ctypes.c_int]
     user32.GetSystemMetrics.restype = ctypes.c_int

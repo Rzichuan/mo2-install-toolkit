@@ -50,7 +50,7 @@ Set or inspect the DPAPI-protected Nexus credential without exposing it:
 & $Tool auth remove --json
 ```
 
-Use `auth set --console --json` only when GUI entry is unavailable. Never read the DPAPI file or echo the credential. `auth clear` is a compatibility alias for `auth remove`; prefer `remove` in new instructions.
+Use `auth set --console --json` only when GUI entry is unavailable. The command reads the key from hidden interactive input; run it in a real Windows PowerShell/Terminal window, not as a non-interactive agent command. If the agent shell is Bash (including Git Bash), do not paste PowerShell syntax such as `& $Tool ...` into Bash. Ask the user to run the command in Windows PowerShell, or invoke PowerShell explicitly: `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '& "<absolute tool path>" auth set --console'`. Never read the DPAPI file or echo the credential. `auth clear` is a compatibility alias for `auth remove`; prefer `remove` in new instructions.
 
 ### Doctor handling
 

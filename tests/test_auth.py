@@ -1,14 +1,17 @@
 import contextlib
 import io
+import importlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from ctypes import wintypes
 from unittest.mock import Mock, patch
 import urllib.error
 
 from mo2_agent_toolkit import auth, cli
 from mo2_agent_toolkit.auth_gui import GuiResult
+import mo2_agent_toolkit.auth_gui as auth_gui
 
 
 class AuthTests(unittest.TestCase):
@@ -62,6 +65,18 @@ class AuthCliTests(unittest.TestCase):
     def test_auth_flags_are_mutually_exclusive(self):
         with self.assertRaises(SystemExit):
             cli.parser().parse_args(["auth", "set", "--gui", "--console"])
+
+    def test_gui_cursor_type_falls_back_to_handle_when_alias_is_missing(self):
+        original = getattr(wintypes, "HCURSOR", None)
+        try:
+            if hasattr(wintypes, "HCURSOR"):
+                delattr(wintypes, "HCURSOR")
+            importlib.reload(auth_gui)
+            self.assertIs(auth_gui.HCURSOR, wintypes.HANDLE)
+        finally:
+            if original is not None:
+                wintypes.HCURSOR = original
+            importlib.reload(auth_gui)
 
     def test_gui_success_emits_metadata_only(self):
         secret = "sensitive-key-never-output"
