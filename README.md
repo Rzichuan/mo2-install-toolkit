@@ -1,5 +1,7 @@
 # MO2 Agent Toolkit
 
+[**English**](README.md) | [简体中文](README.zh-CN.md)
+
 A Windows x64, agent-neutral toolkit for safe Mod Organizer 2 operations. The repository provides the Skill/plugin, while GitHub Releases provide its pinned runtime dependency; users do not need Python.
 
 ## Quick start
