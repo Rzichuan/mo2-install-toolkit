@@ -127,7 +127,11 @@ try {
   }
 
   Invoke-InstallerViaExpression $TestHome $TestLocal | Out-Null
+  $OldRuntimeFixture = Join-Path $TestLocal 'MO2AgentToolkit\runtimes\0.0.1'
+  New-Item -ItemType Directory -Path (Join-Path $OldRuntimeFixture 'mo2-runtime') -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $OldRuntimeFixture 'mo2-runtime\runtime.json') -Value '{"schema_version":1,"tool_version":"0.0.1"}' -Encoding UTF8
   & (Join-Path $Root 'install.ps1') -Version $Version -Target Codex -AgentHome $TestHome -LocalAppDataRoot $TestLocal -AssetDirectory $ExplicitAssets | Out-Null
+  if (Test-Path -LiteralPath $OldRuntimeFixture) { throw 'Successful upgrade did not remove the old Runtime version.' }
 
   foreach ($Agent in @('.codex', '.claude')) {
     $Link = Join-Path $TestHome "$Agent\skills\mo2-mod-installer"

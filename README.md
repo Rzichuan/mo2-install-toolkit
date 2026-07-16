@@ -26,8 +26,8 @@ irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/main/install.
 Pin a reproducible release by downloading the installer from that tag and passing the matching version:
 
 ```powershell
-irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.7/install.ps1 -OutFile install.ps1
-.\install.ps1 -Version 0.10.7
+irm https://raw.githubusercontent.com/Rzichuan/mo2-install-toolkit/v0.10.8/install.ps1 -OutFile install.ps1
+.\install.ps1 -Version 0.10.8
 ```
 
 For an offline or test asset directory, omit `-Version` when the directory contains `mo2-installer-manifest.json` plus the two ZIPs named by it. When `-Version` is supplied, the existing compatibility path remains unchanged: the directory must contain the matching Skill and Runtime ZIPs and both adjacent `.sha256` files.
@@ -67,7 +67,7 @@ Agents must never use bare `setup --json` to auto-write discovered values. Valid
 The API key is stored with Windows DPAPI and must never be pasted into chat, placed in command arguments, or written to a file manually. In a real Windows PowerShell/Terminal window, use the absolute Runtime path installed by the Skill. For the current release:
 
 ```powershell
-$Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\runtimes\0.10.7\mo2-runtime\bin\mo2-tool.exe"
+$Tool = "$env:LOCALAPPDATA\MO2AgentToolkit\runtimes\0.10.8\mo2-runtime\bin\mo2-tool.exe"
 & $Tool auth set --gui --json
 ```
 
@@ -91,23 +91,23 @@ After entering the key, verify only its metadata status:
 
 ### Runtime Release and offline transfer
 
-The GitHub Release asset `mo2-runtime-v0.10.7-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
+The GitHub Release asset `mo2-runtime-v0.10.8-win-x64.zip` is **not** a Skill/plugin or a standalone installer. It is the executable runtime payload that the cloned Skill/plugin downloads automatically. Normal users should use the one-command installer and should not download Release assets manually. The installer consumes both the Skill and runtime assets.
 
 For a machine that must remain offline, first install or clone the matching tagged Skill/plugin on that machine. On another machine, download the runtime ZIP and adjacent `.sha256`, verify the checksum, then extract the archive into the version directory:
 
 ```text
-%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.7
+%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.8
 ```
 
-The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.7\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
+The final metadata path must be `%LOCALAPPDATA%\MO2AgentToolkit\runtimes\0.10.8\mo2-runtime\runtime.json`; do not create a nested `mo2-runtime\mo2-runtime` directory.
 
 The repository's `scripts\build-bundle.ps1` can still create a local complete Bundle under `dist\mo2-mod-installer-bundle`. `scripts\install-adapters.ps1 -BundlePath <local-complete-bundle> -Target Both` remains available for existing installations that want one shared Bundle plus Codex/Claude junctions. This locally built compatibility Bundle is not a GitHub Release asset and is not required for normal clone-based installation.
 
 ### Upgrade, troubleshooting, and removal
 
-- Upgrade by installing or cloning a newer tagged Skill/plugin. Each tag downloads only its matching runtime; `latest` is never used, and old caches remain available for rollback.
+- Upgrade by installing or cloning a newer tagged Skill/plugin. Each tag downloads only its matching runtime; `latest` is never used, and a successful upgrade removes stale versioned runtimes. If an old runtime is still in use, the installer leaves it in place and reports a warning.
 - Network/proxy failures return bootstrap exit `4`; configure the Windows/PowerShell proxy or transfer the matching verified runtime into the exact versioned cache path described above. Hash, metadata, or version failures return exit `3` and are never bypassed.
-- Remove the cloned Skill/plugin through the corresponding agent. Remove an obsolete runtime only by deleting its exact version directory under `%LOCALAPPDATA%\MO2AgentToolkit\runtimes` after confirming no installed Skill still references it.
+- Remove the cloned Skill/plugin through the corresponding agent. A successful upgrade removes obsolete versioned runtimes automatically. If Windows reports that an old runtime is in use, close old agent/tool processes and rerun the installer.
 - Configuration and DPAPI credentials are separate under `%LOCALAPPDATA%\MO2AgentToolkit` and are not removed with a runtime cache.
 
 ## Safe installation

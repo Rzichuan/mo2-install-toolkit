@@ -1,5 +1,9 @@
 ## Unreleased
 
+## 0.10.8 - 2026-07-17
+
+- Clean up stale versioned runtimes after a successful upgrade, while retaining runtimes that Windows reports as in use.
+
 ## 0.10.7 - 2026-07-17
 
 - Read GUI password-edit values through the control message API and normalize browser copy artifacts so GUI validation uses the same key as console validation.

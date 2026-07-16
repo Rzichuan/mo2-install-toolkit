@@ -232,6 +232,28 @@ try {
   $Data=[ordered]@{schema_version=2;bundle=$StableSkill;tool_version=$Version;runtime=$StableRuntime;adapters=@($Managed);adapter_backups=@($AdapterBackups | ForEach-Object { $_.backup });installed_at=(Get-Date).ToUniversalTime().ToString('o')}
   New-Item -ItemType Directory -Path $ToolkitData -Force | Out-Null
   $TempManifest=$ManifestPath+'.tmp'; [IO.File]::WriteAllText($TempManifest,($Data|ConvertTo-Json -Depth 6)+"`n",[Text.UTF8Encoding]::new($false)); Move-Item -LiteralPath $TempManifest -Destination $ManifestPath -Force
+
+  # A successful upgrade makes older versioned runtimes stale. Remove only
+  # installer-owned SemVer directories below the verified runtimes root; keep
+  # the newly installed version and leave in-use directories with a warning.
+  $RuntimeRoot=[IO.Path]::GetFullPath((Join-Path $ToolkitData 'runtimes'))
+  $RemovedOldRuntimes=@(); $SkippedOldRuntimes=@()
+  if(Test-Path -LiteralPath $RuntimeRoot -PathType Container){
+    foreach($OldRuntime in @(Get-ChildItem -LiteralPath $RuntimeRoot -Directory -Force)){
+      if($OldRuntime.Name -notmatch '^\d+\.\d+\.\d+$' -or $OldRuntime.Name -eq $Version){continue}
+      $OldRuntimePath=[IO.Path]::GetFullPath($OldRuntime.FullName)
+      if(-not(Test-ChildPath $OldRuntimePath $RuntimeRoot)){continue}
+      if(-not(Test-Path -LiteralPath (Join-Path $OldRuntimePath 'mo2-runtime\runtime.json') -PathType Leaf)){continue}
+      try { Remove-Item -LiteralPath $OldRuntimePath -Recurse -Force; $RemovedOldRuntimes += $OldRuntime.Name }
+      catch { $SkippedOldRuntimes += $OldRuntime.Name }
+    }
+  }
+  foreach($InvalidRuntime in @(Get-ChildItem -LiteralPath $RuntimeParent -Directory -Filter '.invalid-*' -Force -ErrorAction SilentlyContinue)){
+    try { Remove-Item -LiteralPath $InvalidRuntime.FullName -Recurse -Force }
+    catch { $SkippedOldRuntimes += $InvalidRuntime.Name }
+  }
+  if($RemovedOldRuntimes.Count -gt 0){Write-Output ('Removed old runtimes: ' + ($RemovedOldRuntimes -join ', '))}
+  if($SkippedOldRuntimes.Count -gt 0){Write-Warning ('Could not remove old runtimes (they may be in use): ' + (($SkippedOldRuntimes | Select-Object -Unique) -join ', '))}
   Write-Output "MO2 Agent Toolkit $Version installed for $Target."
   Write-Output "Skill: $StableSkill"
   Write-Output "Runtime: $StableRuntime"
